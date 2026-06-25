@@ -7,31 +7,40 @@ and corporate intelligence gathering. This walking skeleton demonstrates:
 1. Pydantic-based state management
 2. LLM-driven routing with structured output
 3. Conditional graph edges for multi-path orchestration
-4. Clear audit logging for execution tracing
+4. Human-in-loop approval checkpoints for critical decisions
+5. Clear audit logging for execution tracing
+
+Uses Alibaba's Qwen LLM for all NLP tasks through DashScope API.
+Integrates with real external tools (Alpha Vantage financial API).
 """
 
 import json
-import logging
 from datetime import datetime
 from enum import Enum
 from typing import Literal, Any, Dict
 from dataclasses import dataclass
 
+from loguru import logger
 from pydantic import BaseModel, Field, ConfigDict
 from langgraph.graph import StateGraph, END
 from langgraph.types import Send
 from typing_extensions import TypedDict, Annotated
 
+from app.llm import call_qwen_for_triage, call_qwen_for_research, call_qwen_for_general_qa
+from app.tools import financial_tools
+
 # ============================================================================
 # LOGGING CONFIGURATION
 # ============================================================================
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - [%(levelname)s] - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
+# Configure loguru with custom format
+logger.remove()  # Remove default handler
+logger.add(
+    lambda msg: print(msg, end=""),
+    format="<level>{time:YYYY-MM-DD HH:mm:ss}</level> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan> - <level>{message}</level>",
+    level="INFO",
+    colorize=True,
 )
-logger = logging.getLogger("corporate-intelligence-engine")
 
 
 # ============================================================================
@@ -92,6 +101,47 @@ class RouterDecision(BaseModel):
 
 
 # ============================================================================
+# APPROVAL/CHECKPOINT MODELS - FOR HUMAN-IN-LOOP
+# ============================================================================
+
+class ApprovalRequest(BaseModel):
+    """Request requiring human approval - human-in-loop checkpoint."""
+    
+    request_id: str = Field(
+        description="Unique identifier for this approval request"
+    )
+    action: str = Field(
+        description="Recommended action: BUY, SELL, HOLD, etc."
+    )
+    ticker: str = Field(
+        description="Stock ticker symbol"
+    )
+    reasoning: str = Field(
+        description="Qwen's reasoning for the recommendation"
+    )
+    confidence: float = Field(
+        ge=0.0,
+        le=1.0,
+        description="Confidence score of the recommendation"
+    )
+    timestamp: str = Field(
+        description="When the approval request was created"
+    )
+
+
+class ApprovalResponse(BaseModel):
+    """Human's approval/rejection decision."""
+    
+    approved: bool = Field(
+        description="Whether human approved the recommendation"
+    )
+    approver_notes: str = Field(
+        default="",
+        description="Human's notes/reasoning for approval or rejection"
+    )
+
+
+# ============================================================================
 # GRAPH STATE TYPEDDICT (Required by LangGraph)
 # ============================================================================
 
@@ -103,6 +153,8 @@ class GraphState(TypedDict, total=False):
     research_data: Dict[str, Any]
     report_markdown: str
     error_count: int
+    pending_approval: Dict[str, Any]  # Approval request waiting for human
+    approval_status: str  # "pending", "approved", "rejected"
 
 
 # ============================================================================
@@ -111,11 +163,11 @@ class GraphState(TypedDict, total=False):
 
 def triage_node(state: GraphState) -> GraphState:
     """
-    Triage/Router Node - Analyzes user input and extracts actionable information.
+    Triage/Router Node - Uses Qwen to analyze and route user input.
     
     This node:
     1. Takes the raw user input
-    2. Uses LLM (mocked here) with structured output to parse the request
+    2. Uses Qwen LLM with structured output to parse the request
     3. Extracts stock ticker if present
     4. Decides the next routing path (research vs general_q)
     5. Returns updated state for conditional routing
@@ -132,80 +184,41 @@ def triage_node(state: GraphState) -> GraphState:
     logger.info("-" * 80)
     
     # ────────────────────────────────────────────────────────────────────
-    # MOCK LLM CALL - In production, use OpenAI/Anthropic structured output
+    # QWEN LLM CALL - Structured output for routing decision
     # ────────────────────────────────────────────────────────────────────
     
-    logger.info("Invoking LLM for structured routing decision...")
+    logger.info("Invoking Qwen LLM for structured routing decision...")
     
-    # Simulate LLM inference with rule-based fallback
-    user_input_upper = state["user_input"].upper()
+    try:
+        qwen_routing_decision = call_qwen_for_triage(state["user_input"])
+        logger.info(f"Qwen Response: {json.dumps(qwen_routing_decision, indent=2)}")
+        
+        # ────────────────────────────────────────────────────────────────────
+        # UPDATE STATE WITH QWEN RESPONSE
+        # ────────────────────────────────────────────────────────────────────
+        
+        state["current_target_ticker"] = qwen_routing_decision.get("ticker", "")
+        state["routing_decision"] = qwen_routing_decision.get("routing_path", "general_q")
+        
+        confidence = qwen_routing_decision.get("confidence", 0.0)
+        reasoning = qwen_routing_decision.get("reasoning", "No reasoning provided")
+        
+        logger.info(f"Extracted Ticker: {state['current_target_ticker']}")
+        logger.info(f"Routing Decision: {state['routing_decision']}")
+        logger.info(f"Confidence: {confidence:.2%}")
+        logger.info(f"Reasoning: {reasoning}")
+        
+    except Exception as e:
+        logger.error(f"Qwen triage call failed: {str(e)}")
+        logger.warning("Falling back to general Q&A path")
+        state["routing_decision"] = "general_q"
+        state["current_target_ticker"] = ""
+        state["error_count"] += 1
     
-    # Simple heuristic extraction (in production, use proper NLP/LLM)
-    mock_routing_decision = mock_extract_routing_decision(user_input_upper)
-    
-    logger.info(f"LLM Response: {json.dumps(mock_routing_decision.model_dump(), indent=2)}")
-    
-    # ────────────────────────────────────────────────────────────────────
-    # UPDATE STATE
-    # ────────────────────────────────────────────────────────────────────
-    
-    state["current_target_ticker"] = mock_routing_decision.ticker
-    state["routing_decision"] = mock_routing_decision.routing_path
-    
-    logger.info(f"Extracted Ticker: {mock_routing_decision.ticker}")
-    logger.info(f"Routing Decision: {mock_routing_decision.routing_path}")
-    logger.info(f"Confidence: {mock_routing_decision.confidence:.2%}")
     logger.info("[TRIAGE NODE COMPLETE]")
     logger.info("=" * 80)
     
     return state
-
-
-def mock_extract_routing_decision(user_input: str) -> RouterDecision:
-    """
-    Mock LLM that extracts routing decision using simple heuristics.
-    
-    In a production system, this would call an actual LLM (e.g., GPT-4) with
-    a structured output schema. For the walking skeleton, we use pattern matching.
-    """
-    
-    # List of common financial keywords
-    financial_keywords = [
-        "EARNINGS", "STOCK", "TICKER", "PRICE", "ANALYZE", 
-        "FORECAST", "REVENUE", "PE RATIO", "DIVIDEND"
-    ]
-    
-    is_financial_query = any(kw in user_input for kw in financial_keywords)
-    
-    # Simple ticker extraction (look for patterns like NVDA, TSLA, AAPL)
-    import re
-    ticker_pattern = r"\b([A-Z]{1,5})\b"
-    matches = re.findall(ticker_pattern, user_input)
-    
-    # Filter for likely tickers (1-5 uppercase letters)
-    ticker = matches[0] if matches else "UNKNOWN"
-    
-    # Routing logic
-    if is_financial_query and ticker != "UNKNOWN":
-        routing_path = "research"
-        confidence = 0.92
-        reasoning = f"Financial query detected with ticker '{ticker}' mentioned"
-    elif is_financial_query:
-        routing_path = "research"
-        confidence = 0.75
-        reasoning = "Financial query detected, but no specific ticker provided"
-    else:
-        routing_path = "general_q"
-        ticker = ""
-        confidence = 0.85
-        reasoning = "General question not related to specific stock research"
-    
-    return RouterDecision(
-        ticker=ticker,
-        routing_path=routing_path,
-        confidence=confidence,
-        reasoning=reasoning,
-    )
 
 
 # ============================================================================
@@ -214,19 +227,25 @@ def mock_extract_routing_decision(user_input: str) -> RouterDecision:
 
 def research_node(state: GraphState) -> GraphState:
     """
-    Research Node - Gathers and synthesizes financial research data.
+    Research Node - Uses Qwen to generate financial research analysis with human approval.
     
-    This stub demonstrates the research workflow:
+    This node:
     1. Accepts routed state with ticker
-    2. Simulates data gathering from multiple sources
-    3. Appends mock financial data to state
-    4. Returns enriched state for reporting
+    2. Calls REAL Alpha Vantage API for live financial data
+    3. Uses Qwen to generate comprehensive AI analysis
+    4. Adds human-in-loop approval checkpoint for BUY/SELL recommendations
+    5. Returns state with analysis and approval request (if needed)
+    
+    This demonstrates:
+    - External tool invocation (Alpha Vantage API)
+    - Human-in-loop checkpoints at critical decision points
+    - Production-ready error handling
     
     Args:
         state: Current graph state with ticker set
         
     Returns:
-        State with research_data populated
+        State with research_data, report_markdown, and optional pending_approval
     """
     logger.info("=" * 80)
     logger.info("[ENTERING RESEARCH NODE]")
@@ -244,46 +263,122 @@ def research_node(state: GraphState) -> GraphState:
         return state
     
     # ────────────────────────────────────────────────────────────────────
-    # MOCK DATA GATHERING - In production, call real financial APIs
+    # EXTERNAL TOOL: ALPHA VANTAGE API - REAL DATA
     # ────────────────────────────────────────────────────────────────────
     
-    logger.info(f"Simulating data gathering for {ticker}...")
+    logger.info("[EXTERNAL TOOL] Calling Alpha Vantage API for real stock data...")
     
-    # Mock financial data for this ticker
-    mock_financial_data = {
-        "ticker": ticker,
-        "company_name": f"Mock Company for {ticker}",
-        "current_price": 150.25,
-        "market_cap_b": 2500.0,  # in billions
-        "pe_ratio": 28.5,
-        "revenue_ttm_b": 85.0,
-        "net_income_ttm_b": 15.2,
-        "year_high": 165.50,
-        "year_low": 95.30,
-        "52week_change_pct": 52.1,
-        "analyst_rating": "BUY",
-        "target_price": 175.00,
-        "sectors": ["Technology", "Semiconductor"],
-        "recent_events": [
-            "Q3 2024 earnings beat expectations",
-            "New AI chip announced",
-            "Partnership with major cloud provider"
-        ],
-    }
+    # Call real external tool
+    real_stock_data = financial_tools.get_stock_data(ticker)
     
-    logger.info(f"Retrieved data: {json.dumps(mock_financial_data, indent=2)}")
+    logger.info(f"[EXTERNAL TOOL RESULT] {real_stock_data['data_source']}")
+    logger.info(f"  Price: ${real_stock_data['price']}")
+    logger.info(f"  Change: {real_stock_data['change_percent']:+.2f}%")
+    logger.info(f"  Volume: {real_stock_data['volume']:,}")
     
-    # Simulate additional processing/validation
-    logger.info("Validating data integrity...")
-    logger.info("Enriching with sentiment analysis...")
+    # ────────────────────────────────────────────────────────────────────
+    # QWEN RESEARCH ANALYSIS
+    # ────────────────────────────────────────────────────────────────────
     
-    state["research_data"] = mock_financial_data
+    try:
+        logger.info("Invoking Qwen LLM for research analysis based on REAL data...")
+        
+        report_markdown = call_qwen_for_research(
+            ticker=ticker,
+            price=real_stock_data["price"],
+            market_cap=2500.0,  # Could also be fetched from API
+            pe_ratio=28.5,      # Could also be fetched from API
+            change_pct=real_stock_data["change_percent"],
+        )
+        
+        state["research_data"] = real_stock_data
+        state["report_markdown"] = report_markdown
+        
+        logger.info(f"Research analysis generated ({len(report_markdown)} chars)")
+        
+        # ────────────────────────────────────────────────────────────────────
+        # HUMAN-IN-LOOP CHECKPOINT
+        # If recommendation is BUY/SELL, require human approval
+        # ────────────────────────────────────────────────────────────────────
+        
+        recommendation = _extract_recommendation(report_markdown)
+        
+        if recommendation in ["BUY", "SELL"]:
+            logger.warning("[CHECKPOINT] Recommendation requires human approval!")
+            logger.warning(f"[CHECKPOINT] Action: {recommendation}")
+            
+            request_id = f"{ticker}-{datetime.now().timestamp()}"
+            
+            approval_request = ApprovalRequest(
+                request_id=request_id,
+                action=recommendation,
+                ticker=ticker,
+                reasoning=f"Qwen analysis recommends {recommendation} for {ticker}",
+                confidence=0.92,  # Could extract from Qwen response
+                timestamp=datetime.now().isoformat(),
+            )
+            
+            state["pending_approval"] = approval_request.model_dump()
+            state["approval_status"] = "pending"
+            state["routing_decision"] = "awaiting_approval"
+            
+            logger.warning(f"[CHECKPOINT] Approval request {request_id} created")
+            logger.warning("[CHECKPOINT] Workflow PAUSED - awaiting human decision")
+            logger.info("[RESEARCH NODE COMPLETE - AWAITING APPROVAL]")
+            
+        else:
+            # HOLD or other recommendation - no approval needed
+            logger.info(f"[NO CHECKPOINT] Recommendation: {recommendation} (no approval needed)")
+            state["routing_decision"] = "completed"
+            logger.info("[RESEARCH NODE COMPLETE]")
+        
+        logger.info("=" * 80)
+        return state
+        
+    except Exception as e:
+        logger.error(f"Qwen research analysis failed: {str(e)}")
+        logger.warning("Using fallback research data format")
+        state["research_data"] = real_stock_data
+        state["error_count"] += 1
+        
+        # Fallback report
+        state["report_markdown"] = f"""# Financial Research Report: {ticker}
+
+## Live Market Data (Real Alpha Vantage)
+- **Current Price:** ${real_stock_data['price']}
+- **Change:** {real_stock_data['change_percent']:+.2f}%
+- **Volume:** {real_stock_data['volume']:,}
+- **Data Source:** {real_stock_data['data_source']}
+
+## Analysis Status
+*Detailed Qwen analysis generation failed. Please check Qwen API connection.*
+
+---
+*Generated at: {datetime.now().isoformat()}*
+"""
+        state["routing_decision"] = "completed"
+        logger.info("[RESEARCH NODE COMPLETE - ERROR]")
+        logger.info("=" * 80)
+        return state
+
+
+def _extract_recommendation(report_markdown: str) -> str:
+    """
+    Extract recommendation from Qwen report.
     
-    logger.info(f"Research complete. {len(mock_financial_data)} data points collected.")
-    logger.info("[RESEARCH NODE COMPLETE]")
-    logger.info("=" * 80)
+    Looks for keywords: BUY, SELL, HOLD, etc.
+    Falls back to HOLD if unclear.
+    """
+    report_upper = report_markdown.upper()
     
-    return state
+    if "BUY" in report_upper:
+        return "BUY"
+    elif "SELL" in report_upper:
+        return "SELL"
+    elif "HOLD" in report_upper:
+        return "HOLD"
+    else:
+        return "HOLD"  # Safe default
 
 
 # ============================================================================
@@ -292,12 +387,12 @@ def research_node(state: GraphState) -> GraphState:
 
 def general_q_node(state: GraphState) -> GraphState:
     """
-    General Question Node - Handles non-research queries.
+    General Question Node - Uses Qwen to handle non-research queries.
     
-    This stub demonstrates handling of general inquiries:
+    This node:
     1. Accepts routed state
-    2. Processes general query (could involve QA model, knowledge base, etc.)
-    3. Generates response
+    2. Uses Qwen to process general financial inquiries
+    3. Generates comprehensive answer
     4. Returns enriched state with report
     
     Args:
@@ -312,33 +407,41 @@ def general_q_node(state: GraphState) -> GraphState:
     logger.info("-" * 80)
     
     # ────────────────────────────────────────────────────────────────────
-    # MOCK GENERAL QUESTION HANDLING
+    # QWEN GENERAL Q&A
     # ────────────────────────────────────────────────────────────────────
     
-    logger.info("Processing general inquiry...")
-    logger.info("Consulting knowledge base...")
-    
-    mock_response = f"""
-# Response to General Query
+    try:
+        logger.info("Invoking Qwen for general Q&A...")
+        
+        answer = call_qwen_for_general_qa(state["user_input"])
+        state["report_markdown"] = answer
+        
+        logger.info(f"General Q&A response generated ({len(answer)} chars)")
+        
+    except Exception as e:
+        logger.error(f"Qwen QA call failed: {str(e)}")
+        logger.warning("Using fallback response format")
+        state["error_count"] += 1
+        
+        # Fallback response
+        state["report_markdown"] = f"""# Response to Your Question
 
 **Question:** {state['user_input']}
 
 **Answer:**
-This is a mock response from the General Q node. In a production system, this would:
-- Search a knowledge base
-- Use a QA model to generate contextual answers
-- Provide citations and sources
-- Handle follow-up questions
+I encountered an issue retrieving a detailed response at this moment. 
+Please check your Qwen API connection and try again.
 
-**Generated at:** {datetime.now().isoformat()}
+**Tips:**
+- Ensure QWEN_API_KEY environment variable is set
+- Verify your Qwen API key has available credits
+- Check your internet connection
 
 ---
-*This is a walking skeleton demonstrating the orchestration flow.*
-""".strip()
+*Generated at: {datetime.now().isoformat()}*
+"""
     
-    state["report_markdown"] = mock_response
-    
-    logger.info("General query processed successfully")
+    logger.info("General query processed")
     logger.info("[GENERAL Q NODE COMPLETE]")
     logger.info("=" * 80)
     

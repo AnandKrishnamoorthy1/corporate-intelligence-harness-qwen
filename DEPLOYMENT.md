@@ -1,6 +1,6 @@
-# Web Layer Deployment Guide
+# Deployment & Configuration Guide
 
-Complete instructions for running the decoupled FastAPI backend and Streamlit frontend for the Corporate Intelligence Engine.
+Complete instructions for running the Corporate Intelligence Engine locally, with Qwen API integration, Docker containerization, and production configuration.
 
 ## Architecture Overview
 
@@ -481,15 +481,272 @@ run(
 
 ---
 
-## Architecture Components
+## Docker Deployment
 
-### Backend (FastAPI)
+### Build and Run with Docker Compose
 
-**File:** `backend.py`
+```bash
+# Build all images
+docker-compose build
 
-**Key Components:**
-- `AnalysisRequest` - Request validation model
-- `AnalysisResponse` - Response serialization model
+# Start all services
+docker-compose up
+
+# Access:
+# - Backend: http://localhost:8000
+# - Frontend: http://localhost:8501
+# - API Docs: http://localhost:8000/docs
+```
+
+### Services Included
+
+**docker-compose.yml** includes:
+
+| Service | Port | Description |
+|---------|------|-------------|
+| **backend** | 8000 | FastAPI application |
+| **frontend** | 8501 | Streamlit application |
+| **redis** | 6379 | Cache & queue (optional) |
+
+### Production Docker
+
+For production:
+
+```bash
+# Use production compose file
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+# View logs
+docker-compose logs -f backend
+docker-compose logs -f frontend
+
+# Stop services
+docker-compose down
+```
+
+---
+
+## Configuration Management
+
+### Environment Variables
+
+The application uses Pydantic `BaseSettings` to load configuration from `.env` files.
+
+**Key Settings:**
+
+```bash
+# ============================================================================
+# Required: Qwen LLM
+# ============================================================================
+QWEN_API_KEY=sk-xxxxxxxxxxxxxxxx
+QWEN_MODEL=qwen-max
+QWEN_TEMPERATURE=0.7
+QWEN_TOP_P=0.85
+
+# ============================================================================
+# Backend
+# ============================================================================
+BACKEND_HOST=0.0.0.0
+BACKEND_PORT=8000
+BACKEND_RELOAD=false           # Always false in production
+BACKEND_LOG_LEVEL=info
+
+# ============================================================================
+# Frontend
+# ============================================================================
+FRONTEND_HOST=localhost
+FRONTEND_PORT=8501
+
+# ============================================================================
+# Environment
+# ============================================================================
+ENVIRONMENT=production         # development or production
+DEBUG=false
+
+# ============================================================================
+# Optional: Financial APIs (for integration)
+# ============================================================================
+ALPHA_VANTAGE_API_KEY=your_key
+FINNHUB_API_KEY=your_key
+
+# ============================================================================
+# Optional: Monitoring
+# ============================================================================
+LANGSMITH_API_KEY=your_key
+SENTRY_DSN=your_dsn
+```
+
+### Three-Tier Configuration
+
+| Layer | File | Committed | Purpose |
+|-------|------|-----------|---------|
+| **Template** | `.env.example` | ✓ YES | Safe defaults |
+| **Local** | `.env` | ✗ NO | Local secrets |
+| **Production** | AWS Secrets Manager | - | Production secrets |
+
+### Usage in Code
+
+```python
+from config import settings
+
+# Access configuration
+print(settings.qwen_api_key)
+print(settings.backend_port)
+print(settings.is_production)  # Computed property
+```
+
+---
+
+## Monitoring & Observability
+
+### Application Logs
+
+**Backend Logs** (terminal output):
+```
+[INFO] [ENTERING TRIAGE NODE]
+[INFO] Invoking Qwen LLM for structured routing decision...
+[INFO] Qwen Response: {...}
+[INFO] [ENTERING RESEARCH NODE]
+[INFO] Research complete. 14 data points collected.
+```
+
+**Enable Debug Logging:**
+```bash
+BACKEND_LOG_LEVEL=debug python backend.py
+```
+
+### Health Checks
+
+**Docker Health Check:**
+```bash
+curl http://localhost:8000/health
+```
+
+**Expected Response:**
+```json
+{
+  "status": "healthy",
+  "service": "corporate-intelligence-engine"
+}
+```
+
+### Performance Monitoring
+
+**Track these metrics:**
+- Request duration (ms)
+- Token usage per request
+- Qwen API costs
+- Error rate
+- Uptime
+
+---
+
+## Scaling Considerations
+
+### Horizontal Scaling
+
+```bash
+# Use Gunicorn with multiple workers
+gunicorn backend:app -w 4 -k uvicorn.workers.UvicornWorker
+
+# Or use load balancer (Nginx, AWS ALB)
+# upstream backend {
+#   server backend1:8000;
+#   server backend2:8000;
+# }
+```
+
+### Vertical Scaling
+
+**For high-volume:**
+- Increase Qwen model to `qwen-max-longcontext`
+- Add caching layer (Redis)
+- Implement request queuing
+- Use async I/O throughout
+
+### Cost Optimization
+
+1. **Model Selection:**
+   - Use `qwen-turbo` for simple queries
+   - Use `qwen-plus` for balanced needs
+   - Use `qwen-max` only when needed
+
+2. **Caching:**
+   - Cache triage decisions for similar queries
+   - Cache research data by ticker
+
+3. **Rate Limiting:**
+   - Implement per-user rate limits
+   - Use sliding window algorithm
+
+---
+
+## Troubleshooting
+
+### Backend Won't Start
+
+```bash
+# Check if port is in use
+lsof -i :8000  # macOS/Linux
+netstat -ano | findstr :8000  # Windows
+
+# Use different port
+BACKEND_PORT=8001 python backend.py
+```
+
+### Frontend Can't Connect to Backend
+
+```bash
+# Check backend is running
+curl http://localhost:8000/health
+
+# Check firewall
+# Ensure port 8000 is open
+```
+
+### Qwen API Errors
+
+```bash
+# Verify API key is set
+echo $QWEN_API_KEY
+
+# Check DashScope dashboard for:
+# - Valid API key
+# - Remaining quota
+# - Service status
+```
+
+### High Memory Usage
+
+```bash
+# Monitor process
+ps aux | grep python  # macOS/Linux
+tasklist | findstr python  # Windows
+
+# Reduce Streamlit cache size
+# Increase workers (use async)
+```
+
+---
+
+## Next Steps
+
+1. **Test locally** - Follow "Running the Application" above
+2. **Deploy to Docker** - Use docker-compose for consistent environments
+3. **Monitor in production** - Set up logging and alerting
+4. **Scale as needed** - Implement caching, async, load balancing
+5. **Secure** - Add authentication, API rate limiting, HTTPS
+
+---
+
+## Support Resources
+
+- **FastAPI:** https://fastapi.tiangolo.com
+- **Streamlit:** https://docs.streamlit.io
+- **LangGraph:** https://langchain-ai.github.io/langgraph/
+- **Docker:** https://docs.docker.com
+- **Qwen:** https://qwen.aliyun.com
+- **DashScope:** https://dashscope.aliyun.com
 - `LogCapture` - Custom logging handler to capture logs
 - `/api/analyze` - Main analysis endpoint
 - `build_graph()` - Imports and executes orchestrator

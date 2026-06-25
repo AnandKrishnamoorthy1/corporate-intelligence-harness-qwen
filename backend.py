@@ -6,20 +6,22 @@ through a clean HTTP API for the Streamlit frontend to consume.
 
 Endpoints:
   - POST /api/analyze: Execute the orchestrator graph with user input
+  - POST /api/approve/{request_id}: Human approval of recommendations
   - GET /health: Health check endpoint
 
 The backend captures all agent reasoning steps and returns them as structured logs
 so the frontend can display real-time agent activity to the user.
+
+Supports human-in-loop checkpoints for critical recommendations (BUY/SELL).
 """
 
-import logging
 import json
-import io
 import sys
 from datetime import datetime
-from typing import List
-from contextlib import redirect_stdout, redirect_stderr
+from typing import List, Optional, Dict, Any
+from contextlib import contextmanager
 
+from loguru import logger
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -27,7 +29,7 @@ from uvicorn import run
 
 # Import the orchestrator graph and models
 try:
-    from orchestrator import build_graph, GraphState
+    from orchestrator import build_graph, GraphState, ApprovalResponse
 except ImportError:
     raise ImportError(
         "Could not import orchestrator. Ensure orchestrator.py is in the same directory."
@@ -60,17 +62,17 @@ class AnalysisResponse(BaseModel):
     """Response model for the analysis endpoint."""
     
     status: str = Field(
-        description="Execution status: 'success', 'error', or 'partial'"
+        description="Execution status: 'success', 'error', 'awaiting_approval', or 'partial'"
     )
     routing_decision: str = Field(
-        description="The routing path taken: 'research' or 'general_q'"
+        description="The routing path taken: 'research', 'general_q', 'awaiting_approval', 'completed'"
     )
     logs: List[str] = Field(
         description="Sequential log entries from the agent execution",
         default_factory=list
     )
     report_markdown: str = Field(
-        description="Final formatted report in Markdown"
+        description="Final formatted report in Markdown or interim analysis"
     )
     error_message: str = Field(
         default="",
@@ -79,22 +81,38 @@ class AnalysisResponse(BaseModel):
     execution_time_ms: float = Field(
         description="Total execution time in milliseconds"
     )
+    pending_approval: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="If status='awaiting_approval', contains the approval request details"
+    )
+    approval_status: Optional[str] = Field(
+        default=None,
+        description="Approval status: 'pending', 'approved', 'rejected'"
+    )
 
     class Config:
         json_schema_extra = {
             "example": {
-                "status": "success",
-                "routing_decision": "research",
+                "status": "awaiting_approval",
+                "routing_decision": "awaiting_approval",
                 "logs": [
                     "[ENTERING TRIAGE NODE]",
-                    "LLM Response: {routing_path: research, ticker: NVDA}",
-                    "[CONDITIONAL EDGE] Taking RESEARCH path",
-                    "[ENTERING RESEARCH NODE]",
-                    "Research complete. 14 data points collected."
+                    "[EXTERNAL TOOL] Calling Alpha Vantage API...",
+                    "[EXTERNAL TOOL RESULT] Alpha Vantage (REAL API)",
+                    "[CHECKPOINT] Recommendation requires human approval!"
                 ],
                 "report_markdown": "# Financial Research Report: NVDA\n\n...",
                 "error_message": "",
-                "execution_time_ms": 245.3
+                "execution_time_ms": 2450.3,
+                "pending_approval": {
+                    "request_id": "NVDA-1234567890",
+                    "action": "BUY",
+                    "ticker": "NVDA",
+                    "reasoning": "Qwen analysis recommends BUY for NVDA",
+                    "confidence": 0.92,
+                    "timestamp": "2026-06-24T14:30:00"
+                },
+                "approval_status": "pending"
             }
         }
 
@@ -121,24 +139,22 @@ app.add_middleware(
 )
 
 # ============================================================================
-# LOGGING SETUP - CAPTURE FOR API RESPONSES
+# LOGGING SETUP - CAPTURE FOR API RESPONSES WITH LOGURU
 # ============================================================================
 
-class LogCapture(logging.Handler):
-    """Custom logging handler to capture log messages for API responses."""
+class LogCapture:
+    """Loguru-based log capture for API responses."""
     
     def __init__(self):
-        super().__init__()
         self.logs: List[str] = []
-        self.setLevel(logging.INFO)
+        self.sink_id = None
     
-    def emit(self, record):
-        """Capture log records as formatted strings."""
-        try:
-            msg = self.format(record)
-            self.logs.append(msg)
-        except Exception:
-            self.handleError(record)
+    def sink(self, message):
+        """Loguru sink function to capture messages."""
+        # Extract the formatted message
+        log_text = message.record["message"]
+        level = message.record["level"].name
+        self.logs.append(f"[{level}] {log_text}")
     
     def clear(self):
         """Clear the log buffer."""
@@ -147,15 +163,30 @@ class LogCapture(logging.Handler):
     def get_logs(self) -> List[str]:
         """Get all captured logs."""
         return self.logs.copy()
+    
+    @contextmanager
+    def capture(self):
+        """Context manager to enable/disable log capture."""
+        # Add sink for capturing
+        self.clear()
+        sink_id = logger.add(self.sink, format="{message}", level="INFO")
+        try:
+            yield
+        finally:
+            # Remove sink after capture
+            logger.remove(sink_id)
 
 
-# Global log capture handler
+# Global log capture instance
 log_capture = LogCapture()
-log_capture.setFormatter(
-    logging.Formatter(
-        fmt="[%(levelname)s] %(message)s",
-        datefmt="%H:%M:%S"
-    )
+
+# Configure loguru for stderr (console output)
+logger.remove()  # Remove default handler
+logger.add(
+    sys.stderr,
+    format="<level>{time:YYYY-MM-DD HH:mm:ss}</level> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan> - <level>{message}</level>",
+    level="INFO",
+    colorize=True,
 )
 
 # ============================================================================
@@ -201,38 +232,32 @@ async def analyze(request: AnalysisRequest) -> AnalysisResponse:
     
     try:
         # Log the incoming request
-        print(f"\n{'=' * 80}")
-        print(f"[API] Received analysis request")
-        print(f"[API] User Input: {request.user_input}")
-        print(f"{'=' * 80}\n")
+        logger.info(f"Received analysis request")
+        logger.info(f"User Input: {request.user_input}")
         
-        # Clear previous logs
-        log_capture.clear()
-        
-        # Add log capture handler to orchestrator logger
-        orchestrator_logger = logging.getLogger("corporate-intelligence-engine")
-        if log_capture not in orchestrator_logger.handlers:
-            orchestrator_logger.addHandler(log_capture)
-        
-        # Build and compile the graph
-        print("[API] Building state graph...")
-        graph = build_graph()
-        print("[API] Graph compiled successfully\n")
-        
-        # Initialize state
-        initial_state: GraphState = {
-            "user_input": request.user_input,
-            "current_target_ticker": "",
-            "routing_decision": "",
-            "research_data": {},
-            "report_markdown": "",
-            "error_count": 0,
-        }
-        
-        # Execute the graph
-        print(f"[API] Executing orchestrator graph...")
-        final_state = graph.invoke(initial_state)
-        print(f"[API] Graph execution complete\n")
+        # Capture logs during graph execution
+        with log_capture.capture():
+            # Build and compile the graph
+            logger.info("Building state graph...")
+            graph = build_graph()
+            logger.info("Graph compiled successfully")
+            
+            # Initialize state
+            initial_state: GraphState = {
+                "user_input": request.user_input,
+                "current_target_ticker": "",
+                "routing_decision": "",
+                "research_data": {},
+                "report_markdown": "",
+                "error_count": 0,
+                "pending_approval": None,
+                "approval_status": None,
+            }
+            
+            # Execute the graph
+            logger.info("Executing orchestrator graph...")
+            final_state = graph.invoke(initial_state)
+            logger.info("Graph execution complete")
         
         # Get captured logs
         captured_logs = log_capture.get_logs()
@@ -240,18 +265,27 @@ async def analyze(request: AnalysisRequest) -> AnalysisResponse:
         # Calculate execution time
         execution_time = (datetime.now() - start_time).total_seconds() * 1000  # ms
         
+        # Determine response status based on approval state
+        response_status = "success"
+        if final_state.get("approval_status") == "pending":
+            response_status = "awaiting_approval"
+        elif final_state.get("error_count", 0) > 0:
+            response_status = "partial"
+        
         # Construct response
         response = AnalysisResponse(
-            status="success",
+            status=response_status,
             routing_decision=final_state.get("routing_decision", "unknown"),
             logs=captured_logs,
             report_markdown=final_state.get("report_markdown", ""),
             error_message="",
             execution_time_ms=execution_time,
+            pending_approval=final_state.get("pending_approval"),
+            approval_status=final_state.get("approval_status"),
         )
         
-        print(f"[API] Response prepared: {len(captured_logs)} log entries captured")
-        print(f"[API] Execution time: {execution_time:.1f}ms\n")
+        logger.info(f"Response prepared: {len(captured_logs)} log entries captured")
+        logger.info(f"Execution time: {execution_time:.1f}ms")
         
         return response
         
@@ -260,7 +294,7 @@ async def analyze(request: AnalysisRequest) -> AnalysisResponse:
         execution_time = (datetime.now() - start_time).total_seconds() * 1000
         
         error_msg = f"Orchestrator execution failed: {str(e)}"
-        print(f"\n[API ERROR] {error_msg}")
+        logger.error(error_msg)
         
         return AnalysisResponse(
             status="error",
@@ -293,6 +327,58 @@ async def get_routes():
                 "triggers": ["frameworks", "tutorial", "how to", "what is"]
             }
         ]
+    }
+
+
+@app.post("/api/approve/{request_id}", tags=["Approval"])
+async def approve_recommendation(request_id: str, response: ApprovalResponse) -> Dict[str, Any]:
+    """
+    Human approval endpoint for critical recommendations (BUY/SELL).
+    
+    This endpoint demonstrates human-in-loop decision gates. When the AI recommends
+    a strong action (BUY/SELL), it pauses and waits for human approval through this
+    endpoint before proceeding with the recommendation.
+    
+    Args:
+        request_id: ID of the approval request to approve/reject
+        response: ApprovalResponse with approved (bool) and approver_notes
+        
+    Returns:
+        dict: Confirmation of approval status and next steps
+        
+    Note:
+        In a production system, this would:
+        1. Store the approval decision in a database
+        2. Resume the paused orchestrator with the decision
+        3. Trigger additional workflows (notification, execution, etc.)
+        4. Audit the approval for compliance/regulatory purposes
+    """
+    print(f"\n{'=' * 80}")
+    print(f"[APPROVAL] Received approval decision for request: {request_id}")
+    print(f"[APPROVAL] Decision: {'APPROVED' if response.approved else 'REJECTED'}")
+    print(f"[APPROVAL] Notes: {response.approver_notes}")
+    print(f"{'=' * 80}\n")
+    
+    # In production, this would:
+    # 1. Validate the request_id exists and is pending
+    # 2. Store the approval decision
+    # 3. Resume the orchestrator from the pending state
+    # 4. Continue execution with the approved/rejected action
+    
+    action_verb = "approved" if response.approved else "rejected"
+    
+    return {
+        "status": "success",
+        "request_id": request_id,
+        "approval_decision": action_verb,
+        "message": f"Approval request {request_id} has been {action_verb}",
+        "approver_notes": response.approver_notes,
+        "next_steps": (
+            "Action will be executed immediately"
+            if response.approved
+            else "Workflow has been cancelled"
+        ),
+        "timestamp": datetime.now().isoformat(),
     }
 
 

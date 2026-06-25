@@ -1,103 +1,388 @@
-# Local Development Setup Guide
+# Installation & Setup Guide
 
-Complete setup instructions for local development with proper environment configuration.
+Complete setup instructions for the Corporate Intelligence Engine with Qwen LLM.
 
-## Quick Setup (5 minutes)
+## Prerequisites
 
-### 1. Create Local Environment File
+- Python 3.10 or later
+- pip or conda package manager
+- Internet connection (for Qwen API calls)
+- **Qwen API Key** - Get it from [Alibaba DashScope](https://dashscope.aliyun.com/)
+
+---
+
+## Getting Your Qwen API Key
+
+### Step 1: Sign Up
+1. Visit [https://dashscope.aliyun.com/](https://dashscope.aliyun.com/)
+2. Create account or log in with your Alibaba ID
+3. Complete verification if required
+
+### Step 2: Generate API Key
+1. Navigate to API Keys section
+2. Click "Create New API Key"
+3. Copy your API key (keep it secret!)
+4. Add to `.env` file (see below)
+
+---
+
+## Installation
+
+### Option 1: Quick Setup (Recommended)
 
 ```bash
-# Copy the template
+# Clone repository
+cd corporate-intelligence-engine-qwen
+
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate          # macOS/Linux
+# OR
+venv\Scripts\activate             # Windows
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Create environment file
 cp .env.example .env
 
-# Edit .env with your local settings
-# For local development, most defaults are fine
+# Edit .env and add your Qwen API key
+# QWEN_API_KEY=sk-xxxxxxxxxxxx
 ```
 
-### 2. Install Dependencies
+### Option 2: Conda Environment
 
 ```bash
-# Create virtual environment (optional but recommended)
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+# Create conda environment
+conda create -n qwen-engine python=3.10
+conda activate qwen-engine
 
-# Install packages
+# Install dependencies
 pip install -r requirements.txt
-pip install pydantic-settings  # Required for config management
+
+# Configure environment
+cp .env.example .env
+# Edit .env with your QWEN_API_KEY
 ```
-
-### 3. Start Backend
-
-```bash
-# Terminal 1
-uvicorn backend:app --reload --port 8000
-```
-
-### 4. Start Frontend
-
-```bash
-# Terminal 2
-streamlit run frontend.py --server.port 8501
-```
-
-### 5. Access Application
-
-Open browser to: `http://localhost:8501`
 
 ---
 
 ## Environment Configuration
 
-### Local .env File
+### Create `.env` File
 
-Create a `.env` file in the project root with these settings:
+```bash
+cp .env.example .env
+```
+
+Edit `.env` with these required and optional settings:
 
 ```bash
 # ============================================================================
-# API CONFIGURATION
+# REQUIRED: Qwen LLM Configuration
 # ============================================================================
+
+# Get from: https://dashscope.aliyun.com/
+QWEN_API_KEY=your_actual_api_key_here
+
+# Available models: qwen-turbo, qwen-plus, qwen-max (default), qwen-max-longcontext
+QWEN_MODEL=qwen-max
+
+# Model parameters (0.0-2.0 for temperature)
+QWEN_TEMPERATURE=0.7
+QWEN_TOP_P=0.85
+
+# ============================================================================
+# Backend Configuration
+# ============================================================================
+
 BACKEND_HOST=0.0.0.0
 BACKEND_PORT=8000
 BACKEND_RELOAD=true
 BACKEND_LOG_LEVEL=info
 
+# ============================================================================
+# Frontend Configuration
+# ============================================================================
+
 FRONTEND_HOST=localhost
 FRONTEND_PORT=8501
 
-API_REQUEST_TIMEOUT=60
+# ============================================================================
+# Development Settings
+# ============================================================================
 
-# ============================================================================
-# DEVELOPMENT SETTINGS
-# ============================================================================
 DEBUG=true
 ENVIRONMENT=development
 CORS_ORIGINS=http://localhost:8501,http://localhost:3000
 
 # ============================================================================
-# LOGGING
+# Optional: Financial APIs (for future integration)
 # ============================================================================
-LOG_LEVEL=DEBUG
-LOG_FILE_PATH=logs/app.log
 
-# ============================================================================
-# AGENT CONFIGURATION
-# ============================================================================
-AGENT_MAX_ITERATIONS=10
-AGENT_TIMEOUT=30
+# ALPHA_VANTAGE_API_KEY=your_key_here
+# FINNHUB_API_KEY=your_key_here
+```
 
-# ============================================================================
-# APPLICATION SETTINGS
-# ============================================================================
-REPORT_FORMAT=markdown
-REPORT_INCLUDE_CHARTS=true
+---
 
-# ============================================================================
-# SECURITY (Development only - change for production)
-# ============================================================================
-SECRET_KEY=dev-secret-key-change-in-production
-SECURE=false
+## Starting the Application
 
-# ============================================================================
+### Terminal 1: Backend Server
+
+```bash
+python backend.py
+```
+
+Expected output:
+```
+[INFO] Qwen initialized with model: qwen-max
+[INFO] Starting server on http://0.0.0.0:8000
+```
+
+### Terminal 2: Frontend UI
+
+```bash
+streamlit run frontend.py
+```
+
+Expected output:
+```
+  You can now view your Streamlit app in your browser.
+  URL: http://localhost:8501
+```
+
+### Access Application
+
+Open browser → `http://localhost:8501`
+
+---
+
+## Qwen Models Explained
+
+Choose based on your needs:
+
+| Model | Context | Speed | Cost | Best For |
+|-------|---------|-------|------|----------|
+| `qwen-turbo` | 200K | Very Fast | Lowest | Quick testing |
+| `qwen-plus` | 200K | Fast | Low | General use |
+| **`qwen-max`** | 200K | Standard | Medium | **Default (recommended)** |
+| `qwen-max-longcontext` | 30K | Slower | Higher | Very long documents |
+
+**Default:** `qwen-max` balances quality and cost.
+
+Change in `.env`:
+```bash
+QWEN_MODEL=qwen-turbo    # Faster, cheaper
+```
+
+---
+
+## API Configuration Options
+
+### Temperature (Creativity)
+
+`QWEN_TEMPERATURE=0.7` (range: 0.0 - 2.0)
+
+- **0.0** = Deterministic, factual responses
+- **0.7** = Balanced (default)
+- **2.0** = Very creative, varied responses
+
+For financial analysis, use lower values (0.3-0.7).
+
+### Top P (Diversity)
+
+`QWEN_TOP_P=0.85` (range: 0.0 - 1.0)
+
+- **0.85** = Default (balanced diversity)
+- **0.5** = More focused
+- **0.95** = More diverse
+
+---
+
+## Verifying Installation
+
+### Test Backend
+
+```bash
+curl http://localhost:8000/health
+```
+
+Expected response:
+```json
+{"status": "ok"}
+```
+
+### Test Qwen Integration
+
+```bash
+curl -X POST http://localhost:8000/api/analyze \
+  -H "Content-Type: application/json" \
+  -d '{"user_input": "What is a PE ratio?"}'
+```
+
+Expected: JSON response with analysis.
+
+### Test Frontend
+
+Open `http://localhost:8501` and submit a query. You should see:
+1. Query routed to Research or General Q
+2. Qwen processing indicator
+3. AI-generated response
+
+---
+
+## Troubleshooting
+
+### "QWEN_API_KEY not set"
+
+**Problem:** Missing API key in environment
+
+**Solutions:**
+1. Check `.env` file exists in project root
+2. Verify `QWEN_API_KEY=xxx` is added
+3. Restart backend after editing `.env`
+4. Try: `echo $QWEN_API_KEY` to verify it's loaded
+
+### "Qwen API error: 401"
+
+**Problem:** Invalid or expired API key
+
+**Solutions:**
+1. Check API key is correct in `.env`
+2. Verify key in DashScope dashboard
+3. Check if key has remaining quota
+4. Generate a new key if expired
+
+### "Connection timeout"
+
+**Problem:** Can't reach Qwen API
+
+**Solutions:**
+1. Check internet connection
+2. Verify DashScope isn't blocked by firewall
+3. Try different Qwen model (some regions vary)
+4. Check DashScope service status
+
+### "JSON parsing error"
+
+**Problem:** Qwen response couldn't be parsed
+
+**Solutions:**
+1. Check logs for raw response
+2. Verify Qwen API is working: test in DashScope console
+3. Try with different query (may be too complex)
+4. Reduce `QWEN_TEMPERATURE` for more consistent format
+
+### "Rate limit exceeded"
+
+**Problem:** Too many API calls
+
+**Solutions:**
+1. Check DashScope dashboard for quota
+2. Wait a moment before retrying
+3. Upgrade plan if needed
+4. Cache responses for common queries
+
+### Backend won't start
+
+**Problem:** Port already in use or import error
+
+**Solutions:**
+```bash
+# Check if port 8000 is in use
+netstat -tuln | grep 8000  # macOS/Linux
+netstat -ano | findstr :8000  # Windows
+
+# Use different port
+BACKEND_PORT=8001 python backend.py
+
+# Reinstall dependencies
+pip install --force-reinstall -r requirements.txt
+```
+
+### Frontend shows "Connection refused"
+
+**Problem:** Backend not running
+
+**Solutions:**
+1. Start backend first: `python backend.py`
+2. Verify backend is on `http://localhost:8000`
+3. Check `BACKEND_PORT` matches in `.env`
+4. Look for backend error messages in Terminal 1
+
+---
+
+## Development Tips
+
+### Enable Debug Logging
+
+```bash
+BACKEND_LOG_LEVEL=debug python backend.py
+```
+
+This shows detailed Qwen API calls and responses.
+
+### Test Individual Nodes
+
+```python
+from orchestrator import build_graph
+
+graph = build_graph()
+result = graph.invoke({
+    "user_input": "Analyze Tesla",
+    "current_target_ticker": "",
+    "routing_decision": "",
+    "research_data": {},
+    "report_markdown": "",
+    "error_count": 0,
+})
+
+print(result["report_markdown"])
+```
+
+### Monitor Qwen Usage
+
+In DashScope console:
+1. Check tokens consumed
+2. Monitor API calls
+3. Track costs
+4. View error logs
+
+---
+
+## Cost Estimation
+
+Approximate costs per query:
+
+| Operation | Tokens | Cost |
+|-----------|--------|------|
+| Triage (routing) | 100-200 | ~$0.0002 |
+| Research analysis | 1500-2500 | ~$0.003 |
+| General Q&A | 800-1500 | ~$0.002 |
+
+**Example:** 100 queries/day ≈ $0.50/day
+
+Check [DashScope pricing](https://dashscope.aliyun.com/pricing) for current rates.
+
+---
+
+## Next Steps
+
+1. **Test the application** - Try some queries to verify Qwen is working
+2. **Integrate financial APIs** - Add Alpha Vantage or Finnhub for real data
+3. **Customize prompts** - Edit `app/prompts/system_prompts.py` for your needs
+4. **Deploy to production** - See `DEPLOYMENT.md`
+
+---
+
+## Support Resources
+
+- **Qwen Docs:** [https://qwen.aliyun.com](https://qwen.aliyun.com)
+- **DashScope API:** [https://dashscope.aliyun.com/api-details/public-docs](https://dashscope.aliyun.com/api-details/public-docs)
+- **LangGraph:** [https://langchain-ai.github.io/langgraph/](https://langchain-ai.github.io/langgraph/)
+- **FastAPI:** [https://fastapi.tiangolo.com](https://fastapi.tiangolo.com)
+- **Streamlit:** [https://docs.streamlit.io](https://docs.streamlit.io)
 # OPTIONAL: LLM INTEGRATION (for real LLM, uncomment and fill in)
 # ============================================================================
 # OPENAI_API_KEY=sk_test_...

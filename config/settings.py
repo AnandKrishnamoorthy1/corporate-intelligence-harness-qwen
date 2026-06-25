@@ -52,6 +52,14 @@ class Settings(BaseSettings):
     anthropic_api_key: Optional[str] = Field(default=None, env="ANTHROPIC_API_KEY")
     anthropic_model: str = Field(default="claude-3-opus-20240229", env="ANTHROPIC_MODEL")
     
+    gemini_api_key: Optional[str] = Field(default=None, env="GEMINI_API_KEY")
+    gemini_model: str = Field(default="gemini-1.5-pro", env="GEMINI_MODEL")
+    
+    qwen_api_key: Optional[str] = Field(default=None, env="QWEN_API_KEY")
+    qwen_model: str = Field(default="qwen-max", env="QWEN_MODEL")
+    qwen_temperature: float = Field(default=0.7, env="QWEN_TEMPERATURE")
+    qwen_top_p: float = Field(default=0.85, env="QWEN_TOP_P")
+    
     # ========================================================================
     # FINANCIAL DATA APIS
     # ========================================================================
@@ -169,6 +177,11 @@ class Settings(BaseSettings):
     def has_anthropic(self) -> bool:
         """Check if Anthropic is configured."""
         return bool(self.anthropic_api_key)
+    
+    @property
+    def has_gemini(self) -> bool:
+        """Check if Google Gemini is configured."""
+        return bool(self.gemini_api_key)
     
     @property
     def has_database(self) -> bool:
