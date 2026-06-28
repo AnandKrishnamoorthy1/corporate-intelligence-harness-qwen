@@ -12,7 +12,12 @@ Usage:
 """
 
 import os
+from pathlib import Path
 from functools import lru_cache
+
+# Load .env file at module import time
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).parent.parent / ".env", override=True)
 from typing import Optional, List
 from pydantic_settings import BaseSettings
 from pydantic import Field, validator
@@ -55,10 +60,16 @@ class Settings(BaseSettings):
     gemini_api_key: Optional[str] = Field(default=None, env="GEMINI_API_KEY")
     gemini_model: str = Field(default="gemini-1.5-pro", env="GEMINI_MODEL")
     
-    qwen_api_key: Optional[str] = Field(default=None, env="QWEN_API_KEY")
-    qwen_model: str = Field(default="qwen-max", env="QWEN_MODEL")
+    dashscope_api_key: Optional[str] = Field(default=None, env="DASHSCOPE_API_KEY")
+    qwen_api_key: Optional[str] = Field(default=None, env="DASHSCOPE_API_KEY")  # Alias for backward compatibility
+    qwen_model: str = Field(default="qwen3.7-plus", env="QWEN_MODEL")
     qwen_temperature: float = Field(default=0.7, env="QWEN_TEMPERATURE")
     qwen_top_p: float = Field(default=0.85, env="QWEN_TOP_P")
+    dashscope_endpoint: Optional[str] = Field(
+        default="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        env="DASHSCOPE_ENDPOINT",
+        description="DashScope endpoint URL - uses -intl subdomain for international access"
+    )
     
     # ========================================================================
     # FINANCIAL DATA APIS

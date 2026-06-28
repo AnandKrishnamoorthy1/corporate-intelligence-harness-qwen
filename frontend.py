@@ -18,8 +18,9 @@ Run with:
 import streamlit as st
 import requests
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
+import time
 
 # ============================================================================
 # PAGE CONFIGURATION
@@ -111,10 +112,13 @@ if "api_available" not in st.session_state:
 # CONFIGURATION & CONSTANTS
 # ============================================================================
 
-API_BASE_URL = "http://localhost:8000"
+API_BASE_URL = "http://localhost:8002"
 API_HEALTH_ENDPOINT = f"{API_BASE_URL}/health"
 API_ANALYZE_ENDPOINT = f"{API_BASE_URL}/api/analyze"
-REQUEST_TIMEOUT = 60  # seconds
+API_STATUS_ENDPOINT = f"{API_BASE_URL}/api/requests"
+REQUEST_TIMEOUT = 300  # seconds (5 minutes max)
+INACTIVITY_TIMEOUT = 120  # seconds (2 minutes of no log updates = stuck)
+POLL_INTERVAL = 5  # seconds (poll every 5 seconds for new logs)
 
 
 # ============================================================================
@@ -136,6 +140,84 @@ def check_api_health() -> bool:
         return False
 
 
+def call_analysis_api_with_streaming(user_input: str, log_placeholder) -> Optional[dict]:
+    """
+    Call the FastAPI backend and stream logs in real-time via polling.
+    
+    Note: The backend currently blocks on the full response, so polling
+    happens AFTER the request completes. For true streaming, the backend
+    would need to be async and return request_id immediately.
+    
+    Args:
+        user_input: User query
+        log_placeholder: Streamlit placeholder to update logs in real-time
+        
+    Returns:
+        Final response JSON if successful, None otherwise
+    """
+    try:
+        payload = {"user_input": user_input}
+        
+        st.info("📤 Sending request to backend (this may take 60-120 seconds)...")
+        
+        # The POST request will block until the entire analysis is complete
+        response = requests.post(
+            API_ANALYZE_ENDPOINT,
+            json=payload,
+            timeout=REQUEST_TIMEOUT,
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            request_id = result.get("request_id")
+            
+            st.success(f"✓ Request complete! Request ID: {request_id}")
+            
+            # Display all captured logs from the response
+            all_logs = result.get("logs", [])
+            
+            if all_logs:
+                log_text = "\n".join(all_logs)
+                with log_placeholder.container():
+                    st.code(log_text, language="log")
+                st.success(f"✓ {len(all_logs)} log entries captured")
+            else:
+                st.warning("No logs were captured")
+            
+            return result
+            
+        else:
+            st.error(f"❌ API Error: {response.status_code}")
+            try:
+                st.write("Response:", response.json())
+            except:
+                st.write("Response:", response.text)
+            return None
+            
+    except requests.exceptions.ConnectionError:
+        st.error(
+            "❌ **Backend Connection Error**: Could not reach the FastAPI server. "
+            "Please ensure the backend is running:\n\n"
+            "```\nC:\\Users\\anand\\anaconda3\\python.exe backend.py\n```"
+        )
+        return None
+    except requests.exceptions.Timeout:
+        st.error(
+            "❌ **Timeout Error**: The backend took longer than 5 minutes to respond. "
+            "\n\nPossible causes:"
+            "\n- Qwen LLM is taking too long (typical: 60-120 seconds)"
+            "\n- Backend crashed or is stuck"
+            "\n- Network connection lost"
+            "\n\nCheck the backend terminal for errors."
+        )
+        return None
+    except Exception as e:
+        st.error(f"❌ **Error**: {str(e)}")
+        import traceback
+        st.write(traceback.format_exc())
+        return None
+
+
 def call_analysis_api(user_input: str) -> Optional[dict]:
     """
     Call the FastAPI backend to analyze the user input.
@@ -145,6 +227,16 @@ def call_analysis_api(user_input: str) -> Optional[dict]:
         
     Returns:
         Response JSON if successful, None otherwise
+        
+    Notes:
+        Supports request tracking for live log polling.
+        Current implementation waits for full response (blocking).
+        
+        Architecture:
+        1. Creates request with ID on backend
+        2. Logs are captured per-request in backend
+        3. Frontend polls /api/requests/{request_id}/status for live logs
+        4. Response includes request_id for future polling/cancellation
     """
     try:
         payload = {"user_input": user_input}
@@ -168,7 +260,14 @@ def call_analysis_api(user_input: str) -> Optional[dict]:
         )
         return None
     except requests.exceptions.Timeout:
-        st.error("❌ **Timeout Error**: The backend took too long to respond.")
+        st.error(
+            "❌ **Timeout Error**: The backend took too long to respond (5 minutes). "
+            "\n\nPossible reasons:"
+            "\n- Qwen LLM is generating a detailed response (can take 1-2 minutes)"
+            "\n- Backend is stuck on a single operation"
+            "\n- Network latency is high"
+            "\n\nTip: Check the backend logs to see what operation is taking time."
+        )
         return None
     except Exception as e:
         st.error(f"❌ **Error**: {str(e)}")
@@ -346,16 +445,22 @@ if user_input:
         with st.status("🚀 Orchestrating AI Agents...", expanded=True) as status:
             st.write("Initiating multi-agent analysis workflow...")
             
-            # Call the API
-            response = call_analysis_api(user_input)
+            # Create placeholder for live logs
+            log_placeholder = st.empty()
+            
+            # Call the API with streaming logs
+            response = call_analysis_api_with_streaming(user_input, log_placeholder)
             
             if response:
-                # Display logs as they are received
-                st.write("---")
-                st.write("### 📋 Agent Execution Trace")
-                
-                for log_entry in response.get("logs", []):
-                    st.write(f"<div class='log-entry'>{log_entry}</div>", unsafe_allow_html=True)
+                # Display logs from response
+                logs = response.get("logs", [])
+                if logs:
+                    st.write("---")
+                    st.write("### 📋 Captured Agent Logs")
+                    log_text = "\n".join(logs)
+                    st.code(log_text, language="log")
+                else:
+                    st.warning("⚠️ No logs captured in response")
                 
                 # Check for errors
                 if response.get("status") == "error":

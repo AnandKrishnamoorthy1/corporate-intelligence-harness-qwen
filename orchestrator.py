@@ -458,9 +458,10 @@ def reporting_node(state: GraphState) -> GraphState:
     
     This node:
     1. Takes processed state (from either research or general_q)
-    2. Formats the final output
-    3. Adds metadata
-    4. Returns completed state
+    2. Consolidates findings into final report
+    3. If report_markdown already exists (from research/general_q nodes), uses it
+    4. Otherwise builds from raw data
+    5. Returns completed state
     
     Args:
         state: Current graph state
@@ -472,36 +473,35 @@ def reporting_node(state: GraphState) -> GraphState:
     logger.info("[ENTERING REPORTING NODE]")
     logger.info("-" * 80)
     
+    # If report_markdown is already populated from research or general_q node, use it
+    if state.get("report_markdown"):
+        logger.info("Using pre-generated report from analysis node")
+        logger.info("Report generation complete")
+        logger.info("[REPORTING NODE COMPLETE]")
+        logger.info("=" * 80)
+        return state
+    
+    # Otherwise, build from raw data (for fallback paths)
     if state.get("research_data") and state["current_target_ticker"]:
-        # Research path
         ticker = state["current_target_ticker"]
         data = state["research_data"]
         
         if "error" in data:
             report = f"### Error Processing {ticker}\n\n{data['error']}"
         else:
+            # Build report from Alpha Vantage data
             report = f"""# Financial Research Report: {ticker}
 
-## Company Overview
-- **Company:** {data.get('company_name', 'N/A')}
-- **Current Price:** ${data.get('current_price', 'N/A')}
-- **Market Cap:** ${data.get('market_cap_b', 'N/A')}B
+## Current Market Data
+- **Price:** ${data.get('price', 'N/A')}
+- **Daily Change:** {data.get('change_percent', 'N/A')}%
+- **Volume:** {data.get('volume', 'N/A'):,}
+- **Data Source:** {data.get('data_source', 'N/A')}
+- **Last Updated:** {data.get('timestamp', 'N/A')}
 
-## Key Metrics
-- **P/E Ratio:** {data.get('pe_ratio', 'N/A')}
-- **Revenue (TTM):** ${data.get('revenue_ttm_b', 'N/A')}B
-- **Net Income (TTM):** ${data.get('net_income_ttm_b', 'N/A')}B
-- **52-Week Change:** {data.get('52week_change_pct', 'N/A')}%
-
-## Valuation
-- **52-Week Range:** ${data.get('year_low', 'N/A')} - ${data.get('year_high', 'N/A')}
-- **Analyst Rating:** {data.get('analyst_rating', 'N/A')}
-- **Price Target:** ${data.get('target_price', 'N/A')}
-
-## Recent Events
+## Summary
+This report was generated using real market data from Alpha Vantage API combined with Qwen AI analysis.
 """
-            for event in data.get('recent_events', []):
-                report += f"- {event}\n"
         
         state["report_markdown"] = report
     

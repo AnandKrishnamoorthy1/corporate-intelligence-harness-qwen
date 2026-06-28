@@ -13,12 +13,12 @@ Determine:
 3. Provide confidence in your classification
 
 Respond with ONLY valid JSON matching this schema:
-{
+{{
   "ticker": "TICKER_SYMBOL or empty string if not a financial query",
   "routing_path": "research" or "general_q",
   "confidence": 0.0-1.0,
   "reasoning": "brief explanation"
-}
+}}
 
 User query: {user_input}
 """
