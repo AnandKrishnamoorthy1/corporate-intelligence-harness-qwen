@@ -19,7 +19,7 @@ Complete instructions for running the Corporate Intelligence Engine locally, wit
 │  │ • Real-time Log Display     │    │ • /health (GET)         │  │
 │  │ • Report Rendering          │    │ • /api/routes (GET)     │  │
 │  │                             │    │                         │  │
-│  │ Port: 8501                  │    │ Port: 8000              │  │
+│  │ Port: 8501                  │    │ Port: 8002              │  │
 │  │ (via streamlit run)          │    │ (via uvicorn)           │  │
 │  └─────────────────────────────┘    └─────────────────────────┘  │
 │                                              ▲                    │
@@ -95,12 +95,12 @@ pip show fastapi streamlit uvicorn
 cd c:\AI_Agents\corporate-intelligence-engine
 
 # Start the Uvicorn server with auto-reload
-uvicorn backend:app --reload --host 0.0.0.0 --port 8000
+uvicorn backend:app --reload --host 0.0.0.0 --port 8002
 ```
 
 **Expected Output:**
 ```
-INFO:     Uvicorn running on http://0.0.0.0:8000
+INFO:     Uvicorn running on http://0.0.0.0:8002
 INFO:     Application startup complete
 ================================================================================
 CORPORATE INTELLIGENCE ENGINE - FASTAPI BACKEND
@@ -276,8 +276,8 @@ Above the final report, you'll see:
 ### 4. API Documentation
 
 **Access Interactive Docs:**
-- Swagger UI: http://localhost:8000/docs
-- ReDoc: http://localhost:8000/redoc
+- Swagger UI: http://localhost:8002/docs
+- ReDoc: http://localhost:8002/redoc
 
 ---
 
@@ -286,13 +286,13 @@ Above the final report, you'll see:
 ### Test 1: Health Check
 
 ```bash
-curl http://localhost:8000/health
+curl http://localhost:8002/health
 ```
 
 ### Test 2: Analysis Request
 
 ```bash
-curl -X POST http://localhost:8000/api/analyze \
+curl -X POST http://localhost:8002/api/analyze \
   -H "Content-Type: application/json" \
   -d "{\"user_input\": \"Analyze NVDA earnings\"}"
 ```
@@ -300,7 +300,7 @@ curl -X POST http://localhost:8000/api/analyze \
 ### Test 3: Get Routes
 
 ```bash
-curl http://localhost:8000/api/routes
+curl http://localhost:8002/api/routes
 ```
 
 ---
@@ -311,15 +311,15 @@ curl http://localhost:8000/api/routes
 
 **Solution:**
 1. Ensure the FastAPI backend is running in Terminal 1
-2. Verify it's running on `http://localhost:8000`
+2. Verify it's running on `http://localhost:8002`
 3. Reload the Streamlit page (Ctrl+R or Command+R)
 
-### Issue: Backend won't start (Port 8000 already in use)
+### Issue: Backend won't start (port 8002 already in use)
 
 **Solution:**
 ```bash
-# Find process using port 8000
-netstat -ano | findstr :8000
+# Find process using port 8002
+netstat -ano | findstr :8002
 
 # Kill the process (replace PID)
 taskkill /PID <PID> /F
@@ -412,7 +412,7 @@ API_BASE_URL = "https://api.yourdomain.com"
 Using Gunicorn + Uvicorn:
 ```bash
 pip install gunicorn
-gunicorn backend:app -w 4 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
+gunicorn backend:app -w 4 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8002
 ```
 
 ### 4. Deploy Frontend
@@ -493,9 +493,9 @@ docker-compose build
 docker-compose up
 
 # Access:
-# - Backend: http://localhost:8000
+# - Backend: http://localhost:8002
 # - Frontend: http://localhost:8501
-# - API Docs: http://localhost:8000/docs
+# - API Docs: http://localhost:8002/docs
 ```
 
 ### Services Included
@@ -619,7 +619,7 @@ BACKEND_LOG_LEVEL=debug python backend.py
 
 **Docker Health Check:**
 ```bash
-curl http://localhost:8000/health
+curl http://localhost:8002/health
 ```
 
 **Expected Response:**
@@ -651,8 +651,8 @@ gunicorn backend:app -w 4 -k uvicorn.workers.UvicornWorker
 
 # Or use load balancer (Nginx, AWS ALB)
 # upstream backend {
-#   server backend1:8000;
-#   server backend2:8000;
+#   server backend1:8002;
+#   server backend2:8002;
 # }
 ```
 
@@ -687,8 +687,8 @@ gunicorn backend:app -w 4 -k uvicorn.workers.UvicornWorker
 
 ```bash
 # Check if port is in use
-lsof -i :8000  # macOS/Linux
-netstat -ano | findstr :8000  # Windows
+lsof -i :8002  # macOS/Linux
+netstat -ano | findstr :8002  # Windows
 
 # Use different port
 BACKEND_PORT=8001 python backend.py
@@ -698,10 +698,10 @@ BACKEND_PORT=8001 python backend.py
 
 ```bash
 # Check backend is running
-curl http://localhost:8000/health
+curl http://localhost:8002/health
 
 # Check firewall
-# Ensure port 8000 is open
+# Ensure port 8002 is open
 ```
 
 ### Qwen API Errors

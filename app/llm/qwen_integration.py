@@ -191,8 +191,15 @@ def call_qwen_for_triage(user_input: str) -> Dict[str, Any]:
             },
             "routing_path": {
                 "type": "string",
-                "enum": ["research", "general_q"],
+                "enum": ["research", "direct_trade", "general_q", "portfolio"],
                 "description": "Routing path for the query"
+            },
+            "trade_action": {
+                "anyOf": [
+                    {"type": "string", "enum": ["BUY", "SELL"]},
+                    {"type": "null"}
+                ],
+                "description": "Trade action (BUY/SELL) for direct_trade path, null for others"
             },
             "confidence": {
                 "type": "number",
@@ -326,6 +333,54 @@ def call_qwen_for_research(
     except Exception as e:
         logger.error(f"Qwen research call failed: {str(e)}")
         raise RuntimeError(f"Qwen research error: {str(e)}")
+
+
+def call_qwen_persona(
+    system_prompt: str,
+    user_message: str,
+    temperature: Optional[float] = None,
+    top_p: Optional[float] = None,
+) -> str:
+    """
+    Call Qwen as a specific persona and return a plain-text (markdown) response.
+
+    Used by the multi-agent Investment Committee to run distinct analyst personas
+    (Bull Analyst, Bear Auditor, Portfolio Director) through a structured debate.
+
+    Args:
+        system_prompt: Persona-defining system message
+        user_message: The turn prompt (data + running debate transcript)
+        temperature: Sampling temperature, defaults to settings
+        top_p: Nucleus sampling parameter, defaults to settings
+
+    Returns:
+        The persona's argument as a markdown string
+
+    Raises:
+        RuntimeError: If the API call fails
+    """
+    temperature = temperature if temperature is not None else settings.qwen_temperature
+    top_p = top_p if top_p is not None else settings.qwen_top_p
+
+    try:
+        client = get_qwen_client()
+        response = client.chat.completions.create(
+            model=settings.qwen_model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ],
+            temperature=temperature,
+            top_p=top_p,
+        )
+        text = response.choices[0].message.content.strip()
+        # Normalize Unicode asterisks that Qwen occasionally emits
+        text = text.replace("∗∗", "**").replace("∗", "*")
+        text = re.sub(r'\n\n\n+', '\n\n', text)
+        return text
+    except Exception as e:
+        logger.error(f"Qwen persona call failed: {str(e)}")
+        raise RuntimeError(f"Qwen persona error: {str(e)}")
 
 
 def call_qwen_for_general_qa(user_input: str) -> str:

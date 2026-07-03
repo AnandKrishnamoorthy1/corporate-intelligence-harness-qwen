@@ -1,8 +1,267 @@
-# Project Architecture & Folder Structure
+# Architecture — Corporate Intelligence Engine (Qwen Edition)
 
-## Production-Grade Architecture
+## System Overview
 
-This project follows enterprise-level best practices for AI applications with clear separation of concerns, secure configuration management, and Docker containerization.
+A multi-layer agentic system with strict separation between the API surface, the orchestration graph, the agent logic, and the data/broker integrations.
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│  frontend.py  (Streamlit, port 8501)                                 │
+│  • NDJSON stream consumer — renders live agent steps                 │
+│  • Sidebar: portfolio panel, 📚 Sources citation panels             │
+│  • Approve / reject trade UI                                         │
+└──────────────────────────────┬───────────────────────────────────────┘
+                               │ HTTP  /  NDJSON stream
+┌──────────────────────────────▼───────────────────────────────────────┐
+│  backend.py  (FastAPI, port 8002)                                    │
+│  • /api/analyze/stream  — background thread + queue → NDJSON        │
+│  • /api/approve/{id}    — stores approval in PendingTradeStore       │
+│  • /api/execute/{id}    — calls broker.place_order()                 │
+│  • /api/portfolio       — AV-enriched live positions                 │
+│  • /health                                                           │
+└──────────────────────────────┬───────────────────────────────────────┘
+                               │
+┌──────────────────────────────▼───────────────────────────────────────┐
+│  orchestrator.py  (LangGraph StateGraph)                             │
+│                                                                      │
+│  GraphState (TypedDict)  ←─ mutable state passed between nodes      │
+│                                                                      │
+│  triage_node  ──►  route_after_triage()                             │
+│                       │                                              │
+│          ┌────────────┼──────────────┬──────────────┐              │
+│          ▼            ▼              ▼              ▼              │
+│    research_node  trading_node  portfolio_node  general_q_node      │
+│          │            │              │              │              │
+│          └────────────┴──────────────┴──────────────┘              │
+│                               │                                      │
+│                   approval_execution_node                            │
+│                               │                                      │
+│                       reporting_node ──► END                        │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Component Deep-Dives
+
+### `orchestrator.py` — LangGraph State Machine
+
+**State model:** `GraphState` (TypedDict) carries `user_input`, `routing_decision`, `current_target_ticker`, `research_data`, `report_markdown`, `pending_approval`, `approval_status`, `error_count`.
+
+**Nodes:**
+
+| Node | Responsibility |
+|---|---|
+| `triage_node` | Qwen structured JSON output → `routing_path` + `ticker` + `confidence` |
+| `research_node` | 3-way parallel data fetch → `run_investment_committee()` |
+| `trading_node` | Parses dollar/share amount → creates `ApprovalRequest` |
+| `portfolio_node` | Broker account + live prices → HHI + Qwen risk analysis |
+| `general_q_node` | Freeform Qwen Q&A |
+| `approval_execution_node` | Calls `broker.place_order()` when `approval_status == "approved"` |
+| `reporting_node` | Pass-through (report already built by analysis nodes) |
+
+**Routing:** `route_after_triage()` reads `state["routing_decision"]` and returns the node name string. LangGraph evaluates this as a conditional edge.
+
+---
+
+### `app/agents/investment_committee.py` — Tri-Agent Adversarial Committee
+
+**Design pattern:** Shared-evidence adversarial debate.
+
+```
+_format_evidence(ticker, market_data)
+    └─► SHARED MARKET-DATA PAYLOAD  (the only facts any persona may cite)
+            ==> AV quote, AV fundamentals, SEC 10-Q filings
+
+InvestmentCommittee.deliberate(ticker, market_data)
+    for round in 1..N:
+        prior_transcript = render(turns_so_far)
+        ThreadPoolExecutor(max_workers=2):
+            bull_future = _bull_turn(round, evidence, prior_transcript)
+            bear_future = _bear_turn(round, evidence, prior_transcript)
+        turns.extend([bull.result(), bear.result()])
+    verdict = _director_verdict(ticker, evidence, full_transcript)
+```
+
+**Persona temperature stratification:**
+- Bull / Bear: `temperature=0.7` (exploratory arguments)
+- Director: `temperature=0.4` (decisive adjudication)
+
+**Director uses `call_qwen_with_structured_output`** with a strict JSON schema (`CommitteeVerdict`) — guarantees machine-readable verdict, confidence, bull/bear points, risks, dissent.
+
+**Hallucination prevention:** `_format_evidence` builds the "SHARED MARKET-DATA PAYLOAD" header. All three persona system prompts contain the rule: *"Argue ONLY from the market-data payload you are given. Cite exact numbers."*
+
+---
+
+### `app/llm/qwen_integration.py` — Qwen API Wrapper
+
+Three call types, each with a distinct purpose:
+
+| Function | Used by | Notes |
+|---|---|---|
+| `call_qwen_with_structured_output(system, user, schema)` | Triage, Director verdict | JSON schema enforcement via brace-balanced extraction |
+| `call_qwen_persona(system, user, temperature)` | Bull / Bear turns | Free-form markdown argument |
+| `call_qwen_for_general_qa(user)` | `general_q_node`, portfolio analysis | Conversational response |
+
+**Client:** `OpenAI(api_key=..., base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1")` — uses the OpenAI SDK against the DashScope international endpoint. Model: `qwen3.7-plus`.
+
+---
+
+### `app/tools/external_tools.py` — Data Fetch Layer
+
+`FinancialDataTools.get_enriched_stock_data(ticker)`:
+
+```python
+with ThreadPoolExecutor(max_workers=3) as pool:
+    quote_future        = pool.submit(get_stock_data, ticker)        # GLOBAL_QUOTE
+    fundamentals_future = pool.submit(get_fundamental_data, ticker)  # OVERVIEW
+    sec_future          = pool.submit(get_sec_filings, ticker, 2)    # 10-Q XBRL
+    # all three resolve concurrently
+result = merge(quote, fundamentals, sec)
+```
+
+Alpha Vantage fields returned from OVERVIEW: P/E, forward P/E, EPS, analyst target, 52-week range, profit margin, earnings growth YoY, revenue growth YoY, beta, ROE, dividend yield, book value, sector, industry, market cap.
+
+Graceful degradation: any fetch failure returns `{}` / mock data — the pipeline continues with partial data.
+
+---
+
+### `app/tools/sec_tools.py` — SEC EDGAR Integration
+
+Uses [`edgartools`](https://github.com/dgunning/edgartools) to fetch the last N 10-Q filings via EDGAR XBRL. Parsed metrics per quarter: revenue, net income, gross profit, operating income, R&D expense, EPS (diluted), cash, long-term debt, total assets, shareholders' equity, operating cash flow, capex, free cash flow.
+
+Falls silent on any error — SEC data is enrichment, not critical path.
+
+---
+
+### `app/trading/` — Broker Abstraction Layer
+
+**Pattern:** Abstract `BaseBroker` interface with two concrete implementations.
+
+```
+BaseBroker (ABC)
+    ├── MockSimulationEngine    ← default (BROKER_TYPE=simulation)
+    │       • JSON ledger (simulation_ledger.json)
+    │       • Real Alpha Vantage prices for fill execution
+    │       • $10,000 starting balance
+    │       • Tracks positions, cash, order history
+    │
+    └── RobinhoodMCPClient      ← production (BROKER_TYPE=robinhood)
+            • OAuth 2.0 flow via oauth_handler.py
+            • Robinhood Agentic Trading MCP endpoint
+```
+
+`broker_factory.py` reads `BROKER_TYPE` from env and returns the correct instance. The orchestrator never imports a concrete class — it always uses `get_broker_for_user()`.
+
+**Execution flow (approved trade):**
+1. `approval_execution_node` calls `asyncio.run(broker.place_order(account_id, ticker, side, amount_dollars=...))`
+2. MockSimulationEngine fetches real AV price, computes shares, validates cash, writes to ledger
+3. Returns `TradeOrder(order_id, filled_price, total_value, status=FILLED)`
+4. Report is generated from real fill details — not hardcoded strings
+
+---
+
+### `backend.py` — NDJSON Streaming Architecture
+
+The `/api/analyze/stream` endpoint bridges a synchronous LangGraph graph run with async HTTP:
+
+```
+async event_generator():
+    thread = Thread(target=run_graph_sync, args=(container, log_queue, done_event))
+    thread.start()
+
+    while True:
+        while not log_queue.empty():
+            msg = log_queue.get_nowait()
+            yield json.dumps({"type": "log", "message": msg}) + "\n"
+        if done_event.is_set() and log_queue.empty():
+            break
+        await asyncio.sleep(0.15)
+
+    yield json.dumps({"type": "result", "result": payload}) + "\n"
+
+return StreamingResponse(event_generator(), media_type="application/x-ndjson")
+```
+
+Loguru sink in the background thread writes to `log_queue`. The async generator drains it every 150ms and yields NDJSON events.
+
+The `result` payload includes a `sources` field (built by `_extract_sources()`) containing the raw AV and SEC data, enabling the frontend citation panels.
+
+---
+
+### `frontend.py` — Streaming Consumer + Citation Sidebar
+
+**Stream consumption:**
+```python
+for line in response.iter_lines():
+    event = json.loads(line)
+    if event["type"] == "log":
+        steps.append(_format_agent_step(...))
+        log_placeholder.markdown(render_steps(steps))
+    elif event["type"] == "result":
+        final_result = event["result"]
+```
+
+**Citation system:** `st.session_state.last_sources` stores `{av_quote, av_fundamentals, sec_filings}` from the result. The "📚 Sources" sidebar section renders one `st.expander` per data source, showing the exact raw values fed to the LLM.
+
+---
+
+## Folder Structure (Actual)
+
+```
+corporate-intelligence-engine-qwen/
+├── backend.py                  # FastAPI app + NDJSON streaming endpoint
+├── frontend.py                 # Streamlit app + sidebar citation panels
+├── orchestrator.py             # LangGraph state machine + all nodes
+│
+├── app/
+│   ├── agents/
+│   │   └── investment_committee.py
+│   ├── llm/
+│   │   └── qwen_integration.py
+│   ├── tools/
+│   │   ├── external_tools.py
+│   │   └── sec_tools.py
+│   ├── trading/
+│   │   ├── broker_interface.py
+│   │   ├── mock_simulation_engine.py
+│   │   ├── robinhood_client.py
+│   │   ├── broker_factory.py
+│   │   └── oauth_handler.py
+│   └── prompts/
+│       └── system_prompts.py
+│
+├── config/
+│   └── settings.py             # Pydantic BaseSettings (all env vars typed)
+│
+├── docker/
+│   ├── Dockerfile
+│   ├── Dockerfile.frontend
+│   └── docker-compose.yml
+│
+└── tests/
+    └── test_backend.py
+```
+
+---
+
+## Key Design Decisions
+
+**Why LangGraph instead of a plain function chain?**
+State is immutable between nodes, routing is data-driven (not hardcoded), and the graph is inspectable. Adding a new node (e.g., `news_node`) requires zero changes to existing nodes.
+
+**Why a shared evidence contract in the committee?**
+Prevents persona drift — without it, a sufficiently capable LLM will confabulate data to strengthen its assigned position. The shared payload is the "single source of truth" that the Director can use to audit each persona's claims.
+
+**Why parallel Bull/Bear per round instead of sequential?**
+Sequential means each agent *reacts* to the other within the same round, creating sycophancy. Parallel means each agent draws from the *prior* round's transcript — the rebuttal dynamic is preserved but neither agent can simply agree with whatever the other just said.
+
+**Why `temperature=0.4` for the Director?**
+Lower temperature reduces creative "hallucination" of a verdict not supported by the transcript. The Director's job is adjudication, not creativity.
+
+**Why MockSimulationEngine instead of always-live Robinhood?**
+Risk management. A public demo should never accidentally execute real trades. The broker abstraction (`BaseBroker`) means switching to live trading is a one-line env var change: `BROKER_TYPE=robinhood`.
+
 
 ```
 corporate-intelligence-engine/

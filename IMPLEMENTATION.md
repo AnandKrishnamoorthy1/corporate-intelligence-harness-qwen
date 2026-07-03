@@ -1,507 +1,254 @@
-# IMPLEMENTATION SUMMARY
+# IMPLEMENTATION NOTES
 
-## ✅ Deliverables Completed
+## Architecture at a Glance
 
-### 1. **Core State Management** (Pydantic BaseModel)
-```python
-class AgentState(BaseModel):
-    user_input: str
-    current_target_ticker: str
-    routing_decision: str
-    research_data: Dict[str, Any]
-    report_markdown: str
-    error_count: int
-    timestamp: str
+```
+Query → Triage → [research | direct_trade | portfolio | general_q]
+                       ↓
+              approval_execution
+                       ↓
+                   reporting → END
 ```
 
-**Features:**
-- ✅ Full Pydantic v2 validation with ConfigDict
-- ✅ Type-safe state transitions
-- ✅ Immutable across node boundaries
-- ✅ Extensible with extra field support
+All nodes are pure functions operating on a shared `GraphState` TypedDict. LangGraph compiles the graph once at startup and reuses it for every request.
 
 ---
 
-### 2. **Triage/Router Node** with Structured Output
+## 1. Qwen Integration (`app/llm/qwen_integration.py`)
+
+**Client:** OpenAI SDK pointed at DashScope international endpoint.
+
 ```python
-def triage_node(state: GraphState) -> GraphState:
-    # Extracts ticker from user input
-    # Applies RouterDecision schema
-    # Enforces strict JSON validation
-    # Returns routing decision + ticker
+_qwen_client = OpenAI(
+    api_key=settings.dashscope_api_key,
+    base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+)
 ```
 
-**Routing Decision Model:**
-```python
-class RouterDecision(BaseModel):
-    ticker: str
-    routing_path: Literal["research", "general_q"]
-    confidence: float  # 0.0-1.0
-    reasoning: str
-```
+**Model:** `qwen3.7-plus` — configured via `QWEN_MODEL` env var.
 
-**Features:**
-- ✅ LLM-ready structured output (mocked with heuristics)
-- ✅ Confidence scoring for decision quality
-- ✅ Explainable reasoning trace
-- ✅ Enforced schema validation via Pydantic
+Three distinct call types:
+
+| Function | Schema enforcement | Temperature | Use |
+|---|---|---|---|
+| `call_qwen_with_structured_output` | Yes — brace-balanced JSON extraction | configurable | Triage routing, Director verdict |
+| `call_qwen_persona` | No — free-form markdown | configurable | Bull / Bear committee turns |
+| `call_qwen_for_general_qa` | No — conversational | 0.7 | General Q&A, portfolio narrative |
+
+**Structured output parsing:** The parser scans the response for the first `{` and last `}`, validates brace balance, then calls `json.loads()`. Partial responses are truncated to the last complete JSON object.
 
 ---
 
-### 3. **Research Node** (Stub Implementation)
-```python
-def research_node(state: GraphState) -> GraphState:
-    # Receives ticker from triage
-    # Simulates multi-source data gathering
-    # Appends mock financial data
-    # Returns enriched state
-```
+## 2. 4-Path Triage (`triage_node`)
 
-**Mock Data Includes:**
-- Stock price, market cap, P/E ratio
-- Revenue & net income (TTM)
-- Year range, analyst ratings, price targets
-- Sectors and recent corporate events
-- 14+ data points per stock
-
-**Features:**
-- ✅ Error handling for invalid tickers
-- ✅ Audit logging of all data retrieval
-- ✅ Ready to integrate with real APIs (yfinance, Alpha Vantage, etc.)
-
----
-
-### 4. **General Q Node** (Stub Implementation)
-```python
-def general_q_node(state: GraphState) -> GraphState:
-    # Handles non-research queries
-    # Simulates knowledge base lookup
-    # Generates contextual responses
-    # Returns formatted output
-```
-
-**Features:**
-- ✅ Routing for non-ticker queries
-- ✅ Placeholder for QA model integration
-- ✅ Full audit trail in logs
-
----
-
-### 5. **Flow Orchestration** with LangGraph
-```
-┌─────────────────┐
-│   TRIAGE NODE   │ (entry point)
-└────────┬────────┘
-         │ conditional_route_after_triage()
-         ├──────────────────────┬───────────────────
-         │                      │
-    [research]            [general_q]
-         │                      │
-    RESEARCH NODE          GENERAL Q NODE
-         │                      │
-         └──────────────────┬───┘
-                            │
-                      REPORTING NODE
-                            │
-                          [END]
-```
-
-**Conditional Edge Logic:**
-```python
-def route_after_triage(state: GraphState) -> str:
-    if state["routing_decision"] == "research":
-        return "research"
-    else:
-        return "general_q"
-```
-
-**Features:**
-- ✅ LangGraph StateGraph with typed edges
-- ✅ Deterministic conditional routing
-- ✅ Compiled graph for performance
-- ✅ Standard execution (no custom schedulers)
-
----
-
-### 6. **Reporting Node** (Final Consolidation)
-```python
-def reporting_node(state: GraphState) -> GraphState:
-    # Consolidates findings into polished report
-    # Formats as Markdown
-    # Adds metadata
-    # Returns complete state
-```
-
-**Output Format:**
-```markdown
-# Financial Research Report: NVDA
-
-## Company Overview
-- Company: Mock Company for NVDA
-- Current Price: $150.25
-- Market Cap: $2500.0B
-
-## Key Metrics
-- P/E Ratio: 28.5
-- Revenue (TTM): $85.0B
-- ...
-```
-
----
-
-### 7. **Comprehensive Audit Logging**
-All state transitions logged with timestamps and context:
-
-```
-[ENTERING TRIAGE NODE]
-User Input: Analyze the latest earnings for NVDA
-─────────────────────
-Invoking LLM for structured routing decision...
-LLM Response: {
+Qwen returns a `RouterDecision` JSON object:
+```json
+{
   "ticker": "NVDA",
   "routing_path": "research",
-  "confidence": 0.92,
-  "reasoning": "Financial query detected..."
+  "trade_action": null,
+  "confidence": 0.94,
+  "reasoning": "User asked for earnings analysis on a named ticker."
 }
-Extracted Ticker: NVDA
-Routing Decision: research
-[TRIAGE NODE COMPLETE]
+```
 
-[CONDITIONAL ROUTING] Decision: research
-[CONDITIONAL EDGE] Taking RESEARCH path
+`route_after_triage()` maps the `routing_path` string to the LangGraph node name. `direct_trade` additionally carries `trade_action` ("BUY" / "SELL") forward in state.
 
-[ENTERING RESEARCH NODE]
-Target Ticker: NVDA
+---
+
+## 3. Tri-Agent Investment Committee (`app/agents/investment_committee.py`)
+
+### Shared Evidence Contract
+
+`_format_evidence(ticker, market_data)` renders a fixed-format text block:
+```
+SHARED MARKET-DATA PAYLOAD (the ONLY facts any persona may cite)
+
+=== PRICE / QUOTE ===
+- Ticker: NVDA
+- Current Price: $200.09
 ...
+
+=== FUNDAMENTALS ===
+- Sector: Technology
+- P/E Ratio (TTM): 45.2
+...
+
+=== SEC 10-Q FILINGS ===
+- Q-1 (2026-01-26): Revenue $39.33B | Net Income $22.09B ...
 ```
 
-**Logging Features:**
-- ✅ Node entry/exit markers
-- ✅ State transitions logged
-- ✅ LLM decisions visible for debugging
-- ✅ Data point counts and error tracking
-- ✅ Timing information (ISO timestamps)
+Every persona system prompt contains: *"Argue ONLY from the market-data payload you are given."* The Director's system prompt adds: *"Reward arguments grounded in the data; discount unsupported claims."*
 
----
+### Debate Loop
 
-### 8. **Test Cases** (3 Comprehensive Scenarios)
-
-#### Test Case 1: Research with Explicit Ticker
-```
-Input: "Analyze the latest earnings for NVDA"
-Expected: triage → research → reporting
-Result: ✅ PASSED
-Path: RESEARCH
-Ticker Extracted: NVDA
-Data Points: 14
-Report Generated: ✅
-```
-
-#### Test Case 2: Research without Explicit Ticker
-```
-Input: "Show me the forecast for Tesla stock revenue"
-Expected: triage → research → reporting (fallback)
-Result: ✅ PASSED
-Path: RESEARCH
-Ticker Extracted: SHOW (heuristic)
-Data Points: 14
-Report Generated: ✅
-```
-
-#### Test Case 3: General Question (Non-Research)
-```
-Input: "What are the top machine learning frameworks in 2024?"
-Expected: triage → general_q → reporting
-Result: ✅ PASSED
-Path: GENERAL_Q
-Ticker Extracted: (empty)
-Report Generated: ✅
-```
-
----
-
-## 🏗️ Architecture Patterns Implemented
-
-### 1. **Deterministic State Machine**
-- Pure functions (nodes) with no side effects
-- Immutable state passing
-- Deterministic routing based on classified input
-
-### 2. **Structured Output Enforcement**
-- Pydantic models for all state transitions
-- RouterDecision schema validation
-- Type hints throughout graph
-
-### 3. **Modular Node Design**
-- Single Responsibility Principle
-- Each node handles one transformation
-- Nodes are independently testable
-- Easy to mock/stub for development
-
-### 4. **Conditional Execution**
-- Dynamic path selection post-triage
-- Data-driven routing logic
-- Extensible path map
-
-### 5. **Audit Trail**
-- Comprehensive logging at each step
-- JSON-serializable decision traces
-- Execution path visibility
-
----
-
-## 📋 Architectural Requirements Met
-
-| Requirement | Status | Implementation |
-|-------------|--------|-----------------|
-| Central State (Pydantic) | ✅ | `AgentState` BaseModel with 6 required fields |
-| Triage/Router Node | ✅ | `triage_node()` with `RouterDecision` schema |
-| Research Node (Stub) | ✅ | `research_node()` with mock financial data |
-| General Q Node (Stub) | ✅ | `general_q_node()` for non-research queries |
-| Conditional Routing | ✅ | `route_after_triage()` with data-driven paths |
-| LangGraph Orchestration | ✅ | StateGraph with 4 nodes + conditional edges |
-| Audit Logging | ✅ | Comprehensive logs at every node boundary |
-| Executable Tests | ✅ | 3 comprehensive test cases with assertions |
-
----
-
-## 🎯 Key Features
-
-1. **Production-Ready Pattern**
-   - Used at Microsoft, Anthropic, and major AI teams
-   - Scales from single-agent to multi-agent systems
-   - Event-driven architecture ready
-
-2. **Type Safety**
-   - Full Pydantic validation
-   - TypedDict for LangGraph compatibility
-   - Python type hints throughout
-
-3. **Extensibility**
-   - Easy to add new nodes
-   - Straightforward LLM integration
-   - API connectors ready to plug in
-
-4. **Debugging & Observability**
-   - JSON-serializable state at each node
-   - Complete execution traces
-   - Error tracking per execution
-
-5. **Testability**
-   - Mock LLM responses
-   - Stub nodes for development
-   - Deterministic execution
-
----
-
-## 🚀 Next Steps for Production
-
-1. **LLM Integration**
-   ```python
-   # Replace mock_extract_routing_decision with:
-   client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-   response = client.beta.messages.create(
-       model="gpt-4-turbo",
-       response_model=RouterDecision,
-       ...
-   )
-   ```
-
-2. **Financial Data APIs**
-   ```python
-   import yfinance
-   stock_data = yfinance.Ticker(ticker).info
-   state["research_data"] = stock_data
-   ```
-
-3. **Multi-Turn Conversations**
-   - Add chat history to state
-   - Implement conversation context
-   - Track multi-turn research sessions
-
-4. **Error Recovery**
-   - Implement retry logic on API failures
-   - Add circuit breakers
-   - Fallback data sources
-
-5. **Data Persistence**
-   - Store research results in database
-   - Track ticker analysis history
-   - Build knowledge graph
-
-6. **Scaling**
-   - Deploy on AWS Lambda for serverless
-   - Use SQS for job queues
-   - Add Redis for caching
-
----
-
-## � Logging Implementation with Loguru
-
-### Migration Overview
-
-Successfully migrated from Python's standard `logging` module to **loguru** for enhanced logging capabilities, better performance (2-3x faster), and improved developer experience.
-
-### Changes Made
-
-#### Dependencies (`requirements.txt`)
-Added `loguru==0.7.2` to project dependencies.
-
-#### orchestrator.py
-**Before:**
 ```python
-import logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - [%(levelname)s] - %(message)s")
-logger = logging.getLogger("corporate-intelligence-engine")
+for r in range(1, rounds + 1):
+    prior = render(turns_so_far)           # snapshot before this round
+    with ThreadPoolExecutor(max_workers=2):
+        bull = _bull_turn(r, evidence, prior)   # parallel
+        bear = _bear_turn(r, evidence, prior)   # parallel
+    turns.extend([bull, bear])
+verdict = _director_verdict(ticker, evidence, render(turns))
 ```
 
-**After:**
+- Bull prompt: *"Rebut the Bear Auditor's single strongest point using the data."*
+- Bear prompt: *"Dismantle the Bull Analyst's strongest claim using the data."*
+- Each turn is capped at ~180 words (in system prompt) to control cost/latency.
+
+### Verdict Schema
+
 ```python
-from loguru import logger
-
-logger.remove()  # Remove default handler
-logger.add(
-    lambda msg: print(msg, end=""),
-    format="<level>{time:YYYY-MM-DD HH:mm:ss}</level> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan> - <level>{message}</level>",
-    level="INFO",
-    colorize=True,
-)
-```
-
-#### backend.py
-Redesigned `LogCapture` class to use loguru sinks with context manager pattern:
-
-**Before:**
-```python
-class LogCapture(logging.Handler):
-    def emit(self, record):
-        msg = self.format(record)
-        self.logs.append(msg)
-```
-
-**After:**
-```python
-class LogCapture:
-    def sink(self, message):
-        log_text = message.record["message"]
-        level = message.record["level"].name
-        self.logs.append(f"[{level}] {log_text}")
-    
-    @contextmanager
-    def capture(self):
-        self.clear()
-        sink_id = logger.add(self.sink, format="{message}", level="INFO")
-        try:
-            yield
-        finally:
-            logger.remove(sink_id)
-```
-
-**Usage in /api/analyze:**
-```python
-with log_capture.capture():
-    graph.invoke(initial_state)  # All logs captured automatically
-```
-
-#### app/tools/external_tools.py & app/llm/qwen_integration.py
-All modules now import: `from loguru import logger`
-
-All logger calls remain backward-compatible (`.info()`, `.error()`, `.warning()`, etc.)
-
-### Benefits
-
-| Aspect | Before | After |
-|--------|--------|-------|
-| Performance | Standard speed | 2-3x faster |
-| Output | Plain text | Color-coded with function names |
-| Configuration | Per-module setup | Single global instance |
-| Exception Tracing | Basic | Automatic full stack traces |
-| File Rotation | Manual handling | Built-in support |
-| Structured Logging | Limited | Full support for JSON/structured output |
-
-### Sample Console Output
-
-```
-2026-06-24 22:45:18.881 | INFO     | orchestrator:triage_node - [ENTERING TRIAGE NODE]
-2026-06-24 22:45:18.882 | INFO     | orchestrator:triage_node - User Input: Analyze NVDA
-2026-06-24 22:45:19.234 | INFO     | app.tools.external_tools:get_stock_data - [EXTERNAL TOOL] Fetching REAL stock data
-2026-06-24 22:45:19.456 | WARNING  | orchestrator:research_node - [CHECKPOINT] Action: BUY
-```
-
-### API Compatibility
-
-All existing logger method calls work unchanged:
-- ✅ `logger.info(message)`
-- ✅ `logger.debug(message)` 
-- ✅ `logger.warning(message)`
-- ✅ `logger.error(message)`
-- ✅ `logger.critical(message)`
-
-### Future Enhancements with Loguru
-
-#### File Logging with Rotation
-```python
-logger.add(
-    "logs/app.log",
-    rotation="500 MB",
-    retention="10 days",
-    level="DEBUG"
-)
-```
-
-#### JSON Structured Logging
-```python
-logger.add(
-    "logs/app.json",
-    format="{message}",
-    serialize=True
-)
-```
-
-#### Custom Filtering
-```python
-def filter_errors(record):
-    return record["level"].name in ["ERROR", "CRITICAL"]
-
-logger.add(sink, filter=filter_errors)
+class CommitteeVerdict(BaseModel):
+    ticker: str
+    verdict: Literal["BUY", "HOLD", "SELL"]
+    confidence: float          # 0.0–1.0; close debate → lower
+    thesis: str
+    bull_points: List[str]
+    bear_points: List[str]
+    key_risks: List[str]
+    dissent: str               # unresolved disagreement, if any
 ```
 
 ---
 
-## 📊 Execution Statistics
+## 4. Data Fetch Layer (`app/tools/`)
 
-```
-Total Nodes: 4
-Total Edges: 6
-Conditional Paths: 2
-Test Cases: 3
-Test Duration: ~100ms
-Success Rate: 100%
-Errors Encountered: 0
+### `external_tools.py` — Alpha Vantage
 
-Logging:
-- Loguru Version: 0.7.2
-- Performance Improvement: 2-3x faster
-- Color-coded Output: Enabled
-- Files Migrated: 5
-- Syntax Validation: 100% passed
-```
+`get_enriched_stock_data(ticker)` runs three threads concurrently:
 
----
+1. **GLOBAL_QUOTE** → price, change, change%, volume, trading day
+2. **OVERVIEW** → 18 fundamental fields (P/E, EPS, analyst target, margins, beta, sector, …)
+3. **SEC 10-Q** (via `sec_tools.py`) → last 2 quarters of audited financials
 
-## 📁 Project Files
+Any individual failure returns `{}` / mock data. The merge always produces a usable dict.
 
-```
-corporate-intelligence-engine/
-├── orchestrator.py          # Main implementation (500+ lines)
-├── requirements.txt         # Dependencies (3 packages)
-├── README.md               # Project overview
-├── QUICKSTART.md           # Setup instructions
-└── IMPLEMENTATION.md       # This file
-```
+### `sec_tools.py` — SEC EDGAR 10-Q
+
+Uses `edgartools` to fetch XBRL-parsed quarterly filings. Extracted per quarter: revenue, net income, gross profit, operating income, R&D expense, EPS (diluted), cash, long-term debt, total assets, shareholders' equity, operating cash flow, capex, free cash flow.
+
+Identity header sent to EDGAR: `corporate-intelligence-engine@hackathon.demo` (required by SEC fair-use policy).
 
 ---
 
-**Status**: ✅ Walking Skeleton Complete  
-**Ready for**: LLM integration, API connectors, production deployment  
-**Built with**: Python 3.12 | Pydantic 2.6 | LangGraph 0.1.39
+## 5. Broker Abstraction Layer (`app/trading/`)
+
+### Interface
+
+```python
+class BaseBroker(ABC):
+    async def get_account_info(self, account_id: str) -> AccountInfo: ...
+    async def place_order(self, account_id, ticker, side, quantity=None,
+                          order_type=MARKET, price=None, amount_dollars=None) -> TradeOrder: ...
+```
+
+### MockSimulationEngine
+
+- Persists state in `simulation_ledger.json` (JSON file, simple and auditable)
+- Fetches real Alpha Vantage price at fill time — quantity = `amount_dollars / live_price`
+- Validates buying power before accepting BUY orders
+- Returns `TradeOrder(status=FILLED, filled_price=..., total_value=...)` on success
+
+### RobinhoodMCPClient
+
+- OAuth 2.0 via `oauth_handler.py`
+- Calls Robinhood's Agentic Trading MCP endpoint
+- Same `BaseBroker` interface — orchestrator is unaware of which implementation is active
+
+**Selection:** `broker_factory.py` reads `BROKER_TYPE` env var → returns the right instance.
+
+---
+
+## 6. NDJSON Streaming (`backend.py`)
+
+The `/api/analyze/stream` endpoint bridges sync LangGraph with async FastAPI:
+
+```python
+log_queue = queue.Queue()
+done_event = threading.Event()
+
+def run_graph():
+    sink_id = logger.add(lambda m: log_queue.put(m.record["message"]), level="INFO")
+    try:
+        result = graph.invoke(initial_state)
+        container["final_state"] = result
+    finally:
+        logger.remove(sink_id)
+        done_event.set()
+
+thread = threading.Thread(target=run_graph, daemon=True)
+thread.start()
+
+async def event_generator():
+    while True:
+        while not log_queue.empty():
+            yield json.dumps({"type": "log", "message": log_queue.get_nowait()}) + "\n"
+        if done_event.is_set() and log_queue.empty():
+            break
+        await asyncio.sleep(0.15)
+    yield json.dumps({"type": "result", "result": payload}) + "\n"
+```
+
+The `result` payload includes `sources` (raw AV + SEC data) enabling the frontend citation panels.
+
+---
+
+## 7. Portfolio Risk — HHI (`orchestrator.py`, `portfolio_node`)
+
+The portfolio node computes the **Herfindahl-Hirschman Index** for position concentration:
+
+```python
+hhi = sum((position_market_value / total_portfolio_value) ** 2 for each position)
+```
+
+- `hhi = 1.0` → single stock (maximum concentration)
+- `hhi ≤ 0.18` → conventionally diversified (6+ equal positions)
+- `0.18 < hhi ≤ 0.5` → moderate concentration
+- `hhi > 0.5` → HIGH risk
+
+The HHI value and label are passed to Qwen in the portfolio analysis prompt so the AI narrative reflects the actual quantitative risk.
+
+---
+
+## 8. Citation System
+
+**Backend (`_extract_sources`):** Filters `research_data` to only verifiable raw-API fields. Strips all LLM-generated content. Organises into `{av_quote, av_fundamentals, sec_filings}`.
+
+**Committee report inline markers:** `[1]` on the price line, `[2]` on the "Fundamental Data" header, `[3]`/`[4]` on each SEC 10-Q quarter line.
+
+**Frontend sidebar:** One `st.expander` per source showing every raw field value from the API response — the exact data the LLM was given.
+
+---
+
+## 9. Error Handling Strategy
+
+| Layer | Strategy |
+|---|---|
+| Alpha Vantage fetch | Returns mock data on any exception; logs warning |
+| SEC EDGAR fetch | Returns `{"available": False}` silently; pipeline continues |
+| Qwen API call | Raises `RuntimeError` → propagates to `error_count` |
+| Broker `place_order` | Returns `TradeOrder(status=FAILED, error_message=...)` |
+| Graph node | Increments `state["error_count"]`; builds fallback report; never crashes |
+| NDJSON stream | Background thread exception caught → `{"type":"result","status":"error"}` |
+
+---
+
+## 10. Key Libraries
+
+| Library | Version | Purpose |
+|---|---|---|
+| `langgraph` | ≥0.1 | State machine graph orchestration |
+| `pydantic` | v2 | State models, structured output schemas |
+| `fastapi` | ≥0.109 | REST + NDJSON streaming backend |
+| `streamlit` | ≥1.32 | Frontend UI |
+| `openai` | ≥1.0 | Qwen API client (OpenAI-compatible) |
+| `loguru` | ≥0.7 | Structured logging with sink injection |
+| `edgartools` | ≥2.0 | SEC EDGAR XBRL 10-Q parsing |
+| `httpx` | ≥0.25 | Async HTTP for Robinhood MCP client |
+
+---
+
+**Status:** Production-ready agentic system  
+**LLM:** Alibaba Qwen `qwen3.7-plus` via DashScope international  
+**Trading:** Paper simulation (real AV prices) with live Robinhood MCP option
