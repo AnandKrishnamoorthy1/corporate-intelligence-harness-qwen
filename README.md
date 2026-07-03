@@ -1,272 +1,178 @@
-# Corporate Intelligence Engine - Qwen Edition
+# Corporate Intelligence Engine — Qwen Edition
 
-**Track 4 Submission: Alibaba Hackathon**
+**Track 4 Submission — Qwen Cloud Global AI Hackathon: Autopilot Agent**
 
-An intelligent financial workflow automation agent that demonstrates **real external tool integration** and **human-in-loop decision gates** for autonomous business operations.
-
-## 🎯 Hackathon Narrative
-
-**Problem:** Financial analysts waste time manually researching stocks, retrieving data, and making trading recommendations. Each decision should be validated by human judgment before execution.
-
-**Solution:** An AI agent that:
-1. **Routes queries intelligently** - Classifies whether user wants stock analysis or general knowledge
-2. **Fetches REAL financial data** - Calls Alpha Vantage API for live stock prices and metrics
-3. **Generates AI analysis** - Uses Alibaba Qwen LLM to create research reports
-4. **Requires human approval** - Pauses on BUY/SELL recommendations until human approves
-
-**Track 4 Alignment:**
-- ✅ **Ambiguous input handling**: "Analyze NVDA" → Routed to research path
-- ✅ **External tool invocation**: Real Alpha Vantage API (not mock data)
-- ✅ **Human-in-loop gates**: Approval checkpoints for critical actions
-- ✅ **End-to-end workflow**: Query → Analysis → Decision → Approval → Report
+A production-grade agentic trading system powered by **Alibaba Qwen** (`qwen3.7-plus`). A **Tri-Agent Adversarial Investment Committee** — Bull Analyst, Bear Auditor, and Portfolio Director — debates live market data from Alpha Vantage and SEC EDGAR before issuing a vetted BUY / HOLD / SELL verdict. Every trade requires explicit human approval before executing against a paper-trading simulation.
 
 ---
 
-## 🚀 Quick Start (5 Minutes)
+## 🎯 What It Solves
+
+| Pain Point | Solution |
+|---|---|
+| Manual multi-source data aggregation | 3-way parallel fetch: AV quote + fundamentals + SEC 10-Q |
+| Single-analyst confirmation bias | Adversarial Bull vs Bear debate with structured rebuttal |
+| Unverifiable AI claims | Citation system — every data point traced to its API source |
+| Unsafe autonomous trading | Human-in-loop approval gate before every order execution |
+| Fragile single-LLM analysis | Three Qwen personas with different temperature tuning |
+
+**Track 4 Alignment:**
+- ✅ **Ambiguous input handling** — Triage node classifies 4 query types via structured Qwen output
+- ✅ **External tool invocation** — Alpha Vantage (real-time + fundamentals) + SEC EDGAR (XBRL 10-Q)
+- ✅ **Human-in-loop gates** — Approval checkpoint before any trade executes
+- ✅ **End-to-end agentic workflow** — Query → Triage → Committee → Approval → Execution → Report
+- ✅ **Robinhood Agentic Trading MCP** — `RobinhoodMCPClient` wired through broker abstraction layer
+
+---
+
+## 🚀 Quick Start
 
 ### Prerequisites
 - Python 3.10+
-- Qwen API key from [Alibaba DashScope](https://dashscope.aliyun.com/)
-- Alpha Vantage API key from [Alpha Vantage](https://www.alphavantage.co/)
+- Qwen API key — [DashScope International](https://dashscope-intl.aliyuncs.com/)
+- Alpha Vantage API key — [alphavantage.co](https://www.alphavantage.co/support/#api-key) (free tier works)
 
 ### Setup
 
 ```bash
-# 1. Clone and setup
-git clone <repo>
-cd corporate-intelligence-engine-qwen
-
-# 2. Install dependencies
+# 1. Install dependencies
 pip install -r requirements.txt
 
-# 3. Configure environment
+# 2. Configure environment
 cp .env.example .env
-# Add these to .env:
-# QWEN_API_KEY=your_qwen_key
-# ALPHA_VANTAGE_API_KEY=your_av_key
+# Edit .env — set DASHSCOPE_API_KEY and ALPHA_VANTAGE_API_KEY
 
-# 4. Run in two terminals
-
-# Terminal 1: Backend API (port 8000)
+# 3. Terminal 1 — Backend (port 8002)
 python backend.py
 
-# Terminal 2: Frontend (port 8501)
+# 4. Terminal 2 — Frontend (port 8501)
 streamlit run frontend.py
 ```
 
 Open `http://localhost:8501` and try:
-- "Analyze NVDA earnings" → Research path with real Alpha Vantage data
-- "What is the P/E ratio formula?" → General Q&A path
+- `"Analyze NVDA"` — full committee research path
+- `"Buy $500 of TSLA"` — direct trade with approval gate
+- `"Show my portfolio"` — live P&L + HHI risk analysis
+- `"What is a P/E ratio?"` — general Q&A path
 
 ---
 
 ## 🏆 Key Features
 
-### 1. Real External Tools
+### 1. Tri-Agent Adversarial Investment Committee
+Three distinct Qwen personas debate each stock using a **shared, immutable evidence contract** — no persona can invent facts:
+
 ```
-User Query
+Bull Analyst (temp 0.7)  ─┐
+                           ├─► Portfolio Director (temp 0.4) ─► BUY/HOLD/SELL + confidence
+Bear Auditor (temp 0.7)  ─┘
+
+Each round: Bull and Bear argue in PARALLEL (ThreadPoolExecutor)
+            Both see the full prior-round transcript for rebuttals
+            Director weighs evidence quality, not rhetoric
+```
+
+### 2. 3-Way Parallel Data Fetch
+```
+get_enriched_stock_data(ticker)
+    ├── [Thread 1] Alpha Vantage GLOBAL_QUOTE  → price, change%, volume
+    ├── [Thread 2] Alpha Vantage OVERVIEW      → P/E, EPS, sector, margins, beta
+    └── [Thread 3] SEC EDGAR 10-Q (edgartools) → revenue, NI, R&D, FCF (last 2 qtrs)
+                                                  parsed from XBRL — audited data
+```
+
+### 3. 4-Path Intelligent Routing
+Qwen triage outputs structured JSON with confidence score:
+
+| Path | Trigger Example | What Happens |
+|---|---|---|
+| `research` | "Analyze NVDA earnings" | Committee debate + report |
+| `direct_trade` | "Buy $500 of TSLA" | Approval gate → broker execution |
+| `portfolio` | "Show my portfolio" | Live P&L + HHI concentration risk |
+| `general_q` | "What is a P/E ratio?" | Qwen Q&A |
+
+### 4. Human-in-Loop Approval Gate
+```
+Committee → BUY verdict
     ↓
-[REAL DATA] Alpha Vantage API
-    ↓ (Returns: price, change, volume, etc.)
-[QWEN] AI Analysis
-```
-
-### 2. Human-in-Loop Checkpoints
-```
-Qwen Recommends: BUY NVDA
+[CHECKPOINT] Workflow PAUSED — trade stored with unique request_id
     ↓
-[CHECKPOINT] Workflow PAUSED
+Human reviews in sidebar (Approve / Reject)
     ↓
-Awaits Human Approval via /api/approve endpoint
-    ↓
-Action Executed or Cancelled
+Approved → broker.place_order() executes via BaseBroker abstraction
+           Portfolio ledger updates with real Alpha Vantage fill price
+Rejected → report updated, no trade executed
 ```
 
-### 3. Intelligent Routing
-- **Research Path**: Stock tickers, earnings, analyst ratings
-- **General Q Path**: Frameworks, tutorials, definitions
+### 5. Citation / Source Transparency
+Every data point in the report carries an inline citation marker (`[1]` `[2]` `[3]` `[4]`).  
+The sidebar **📚 Sources** panel shows the exact raw API payload each marker refers to — judges can verify no hallucination.
 
-### 4. Production-Ready Error Handling
-- Alpha Vantage timeout → Fallback to mock data with logging
-- Qwen API failures → Graceful degradation
-- All errors logged with `[EXTERNAL TOOL]` prefix for traceability
-
----
-
-## 📊 Workflow Example
-
-**User:** "Should I buy NVDA?"
-
-**Agent Steps:**
-```
-1. [TRIAGE NODE] → Extracts ticker: NVDA
-2. [RESEARCH NODE] → Calls Alpha Vantage API for live data
-   [EXTERNAL TOOL] Alpha Vantage: $NVDA 127.50 (+2.3%)
-3. [QWEN ANALYSIS] → Generates research report
-4. [CHECKPOINT] Recommendation: BUY (confidence: 92%)
-5. [AWAITING APPROVAL] Human reviews and approves
-6. [REPORTING] → Final report with approval trail
-```
+### 6. NDJSON Streaming
+Backend streams `{"type":"log",...}` and `{"type":"result",...}` events over a single HTTP connection. The frontend renders live step-by-step progress (Claude/Copilot style) without polling.
 
 ---
 
 ## 🏗️ Architecture
 
 ```
-┌─────────────────────────────────────────────┐
-│     Streamlit Web UI (Port 8501)            │
-│  - Real-time execution logs                 │
-│  - Live market data display                 │
-│  - Approval decision interface              │
-└────────────────┬────────────────────────────┘
-                 │ HTTP REST
-                 ↓
-┌─────────────────────────────────────────────┐
-│   FastAPI Backend (Port 8000)               │
-│  - /api/analyze: Execute workflow           │
-│  - /api/approve/{id}: Human decisions       │
-│  - /health: Service monitoring              │
-└────────────────┬────────────────────────────┘
-                 │
-                 ↓
-┌─────────────────────────────────────────────┐
-│   LangGraph State Machine Orchestrator      │
-│                                             │
-│  ┌─────────────┐                          │
-│  │  TRIAGE     │─→ Route to research/Q&A │
-│  │  NODE       │   based on query type    │
-│  └──────┬──────┘                          │
-│         │                                  │
-│    ┌────┴─────────────────┐              │
-│    ↓                      ↓              │
-│  RESEARCH            GENERAL_Q          │
-│  NODE                NODE               │
-│  (External Tools)    (Pure LLM)         │
-│    ↓                      ↓              │
-│    └────┬─────────────────┘              │
-│         ↓                                 │
-│  ┌──────────────────────┐               │
-│  │  REPORTING NODE      │               │
-│  │  Format final output │               │
-│  └──────────────────────┘               │
-└─────────────────────────────────────────────┘
-         ↓
-    External Tools:
-    - Alpha Vantage API (Real market data)
-    - Qwen LLM (Analysis & reasoning)
+┌─────────────────────────────────────────────────────────────┐
+│  Streamlit Frontend  (port 8501)                            │
+│  • NDJSON stream consumer — live step display               │
+│  • Sidebar: Portfolio panel, 📚 Sources citations          │
+│  • Approve / Reject trade buttons                           │
+└──────────────────────────┬──────────────────────────────────┘
+                           │ HTTP / NDJSON stream
+┌──────────────────────────▼──────────────────────────────────┐
+│  FastAPI Backend  (port 8002)                               │
+│  /api/analyze/stream  — NDJSON streaming endpoint           │
+│  /api/approve/{id}    — human approval decision             │
+│  /api/execute/{id}    — post-approval trade execution       │
+│  /api/portfolio       — live portfolio with AV prices       │
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+┌──────────────────────────▼──────────────────────────────────┐
+│  LangGraph State Machine  (orchestrator.py)                 │
+│                                                             │
+│   START → triage_node                                       │
+│                │                                            │
+│     ┌──────────┼──────────────────────┐                   │
+│     ▼          ▼           ▼          ▼                   │
+│  research  direct_trade  portfolio  general_q              │
+│     │          │           │          │                    │
+│     └──────────┴───────────┴──────────┘                   │
+│                │                                            │
+│     approval_execution_node                                 │
+│                │                                            │
+│        reporting_node → END                                 │
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+          ┌────────────────┼────────────────┐
+          ▼                ▼                ▼
+   Alpha Vantage      SEC EDGAR         Broker
+   GLOBAL_QUOTE       10-Q XBRL     (MockSimulation
+   + OVERVIEW         (edgartools)   Engine / Robinhood
+                                     MCP Client)
 ```
 
-### State Graph Flow
-
+### Tri-Agent Committee (research path detail)
 ```
-START
-  ↓
-[INPUT] "Analyze NVDA"
-  ↓
-TRIAGE_NODE
-  ├─ Qwen: Extract ticker "NVDA"
-  ├─ Classify: "research" path
-  └─ Set confidence
-  ↓
-CONDITIONAL EDGE
-  ├─ If research → RESEARCH_NODE
-  └─ If general_q → GENERAL_Q_NODE
-  ↓
-RESEARCH_NODE [EXTERNAL TOOLS]
-  ├─ Call Alpha Vantage API (REAL DATA)
-  ├─ Call Qwen for analysis
-  ├─ [CHECKPOINT] Extract recommendation
-  ├─ If BUY/SELL → Await human approval
-  └─ If HOLD → Continue
-  ↓
-REPORTING_NODE
-  ├─ Format markdown
-  ├─ Include approval trail
-  └─ Finalize output
-  ↓
-END
-  ↓
-[OUTPUT] Full report with logs + approval status
-```
-
----
-
-## 📋 Track 4 Evaluation Checklist
-
-| Requirement | Implementation | Status |
-|------------|----------------|--------|
-| **Handles ambiguous input** | Triage node classifies "Analyze X" queries | ✅ |
-| **Invokes external tools** | Real Alpha Vantage API integration | ✅ |
-| **Human-in-loop gates** | Approval checkpoints for BUY/SELL | ✅ |
-| **End-to-end workflow** | Query → Analysis → Decision → Approval → Report | ✅ |
-| **Error handling** | Fallback to mock data + logging | ✅ |
-| **Production ready** | Pydantic validation, CORS, structured logging | ✅ |
-
----
-
-## 🔌 API Endpoints
-
-### 1. Analysis Endpoint
-```bash
-POST /api/analyze
-Content-Type: application/json
-
-{
-  "user_input": "Analyze NVDA earnings"
-}
-```
-
-**Response (Awaiting Approval):**
-```json
-{
-  "status": "awaiting_approval",
-  "routing_decision": "awaiting_approval",
-  "logs": [
-    "[TRIAGE NODE] Extracted ticker: NVDA",
-    "[EXTERNAL TOOL] Alpha Vantage: NVDA 127.50 (+2.3%)",
-    "[CHECKPOINT] Recommendation requires human approval!"
-  ],
-  "report_markdown": "# Financial Analysis: NVDA...",
-  "pending_approval": {
-    "request_id": "NVDA-1234567890",
-    "action": "BUY",
-    "ticker": "NVDA",
-    "reasoning": "Strong earnings + AI opportunity",
-    "confidence": 0.92,
-    "timestamp": "2024-06-24T14:30:00"
-  },
-  "approval_status": "pending",
-  "execution_time_ms": 2450.3
-}
-```
-
-### 2. Approval Endpoint
-```bash
-POST /api/approve/NVDA-1234567890
-Content-Type: application/json
-
-{
-  "approved": true,
-  "approver_notes": "Confirmed. Strong fundamentals for long position."
-}
-```
-
-**Response:**
-```json
-{
-  "status": "success",
-  "request_id": "NVDA-1234567890",
-  "approval_decision": "approved",
-  "message": "Approval request approved",
-  "approver_notes": "Confirmed. Strong fundamentals...",
-  "next_steps": "Action will be executed immediately",
-  "timestamp": "2024-06-24T14:30:15"
-}
-```
-
-### 3. Health Check
-```bash
-GET /health
+research_node
+    │
+    ├── get_enriched_stock_data(ticker)          ← 3 threads, one call
+    │       ├── AV GLOBAL_QUOTE
+    │       ├── AV OVERVIEW
+    │       └── SEC EDGAR 10-Q
+    │
+    └── run_investment_committee(ticker, data, rounds=2)
+            │
+            Round 1:  Bull ──┐  (parallel)
+                      Bear ──┘
+            Round 2:  Bull ──┐  (parallel, sees R1 transcript)
+                      Bear ──┘
+            Director verdict (structured JSON schema)
+            │
+            └── render_committee_report() → report_markdown
 ```
 
 ---
@@ -274,91 +180,137 @@ GET /health
 ## 📂 Project Structure
 
 ```
-app/
-├── llm/
-│   └── qwen_integration.py      # Qwen API wrapper (all LLM calls)
-├── tools/
-│   ├── __init__.py
-│   └── external_tools.py        # Alpha Vantage integration
-├── api/
-├── models/
-└── prompts/
-    └── system_prompts.py        # Qwen prompt templates
-
-config/
-├── __init__.py
-└── settings.py                  # Qwen & Alpha Vantage config
-
-orchestrator.py                  # LangGraph state machine
-backend.py                       # FastAPI REST service
-frontend.py                      # Streamlit web UI
-
-requirements.txt                 # Python dependencies
+├── backend.py              # FastAPI — all endpoints, NDJSON streaming
+├── frontend.py             # Streamlit — UI, sidebar, streaming consumer
+├── orchestrator.py         # LangGraph state machine — all graph nodes
+│
+├── app/
+│   ├── agents/
+│   │   └── investment_committee.py   # Tri-Agent adversarial committee
+│   ├── llm/
+│   │   └── qwen_integration.py       # Qwen client, structured output, persona calls
+│   ├── tools/
+│   │   ├── external_tools.py         # Alpha Vantage GLOBAL_QUOTE + OVERVIEW
+│   │   └── sec_tools.py              # SEC EDGAR 10-Q via edgartools (XBRL)
+│   ├── trading/
+│   │   ├── broker_interface.py       # Abstract BaseBroker contract
+│   │   ├── mock_simulation_engine.py # Paper trading — $10k balance, real AV prices
+│   │   ├── robinhood_client.py       # Robinhood MCP client (live trading)
+│   │   ├── broker_factory.py         # BROKER_TYPE env var selects implementation
+│   │   └── oauth_handler.py          # Robinhood OAuth flow
+│   └── prompts/
+│       └── system_prompts.py         # Triage + research system prompts
+│
+├── config/
+│   └── settings.py         # Pydantic settings — all env vars typed
+│
+├── docker/
+│   ├── Dockerfile
+│   ├── Dockerfile.frontend
+│   └── docker-compose.yml
+│
+└── tests/
+    └── test_backend.py
 ```
 
 ---
 
-## 🔑 Configuration
+## 🔑 Configuration (`.env`)
 
-Create `.env` file:
 ```bash
-# Qwen LLM (Alibaba DashScope)
-QWEN_API_KEY=your_dashscope_key
-QWEN_MODEL=qwen-max
+# Required
+DASHSCOPE_API_KEY=your_dashscope_key          # Qwen LLM
+ALPHA_VANTAGE_API_KEY=your_av_key             # Market data
+
+# Optional — Qwen model settings
+QWEN_MODEL=qwen3.7-plus
 QWEN_TEMPERATURE=0.7
 QWEN_TOP_P=0.85
+DASHSCOPE_ENDPOINT=https://dashscope-intl.aliyuncs.com/compatible-mode/v1
 
-# Alpha Vantage Financial API
-ALPHA_VANTAGE_API_KEY=your_alpha_vantage_key
+# Optional — Broker mode (default: simulation)
+BROKER_TYPE=simulation                         # or: robinhood
+ROBINHOOD_CLIENT_ID=...
+ROBINHOOD_CLIENT_SECRET=...
 
 # Server
-BACKEND_HOST=127.0.0.1
-BACKEND_PORT=8000
-FRONTEND_PORT=8501
-```
-
-For detailed setup with Docker, see [SETUP.md](SETUP.md) and [DEPLOYMENT.md](DEPLOYMENT.md).
+BACKEND_PORT=8002
 ```
 
 ---
 
-## 🚀 Features
+## 🔌 API Reference
 
-✅ **AI-Powered Routing** - Smart query classification  
-✅ **Professional Reports** - Markdown-formatted analysis  
-✅ **Structured Output** - JSON schemas for reliability  
-✅ **Error Handling** - Fallback responses for API failures  
-✅ **Observable** - Comprehensive logging and tracing  
-✅ **Cost-Effective** - Alibaba's competitive pricing  
+### Stream analysis
+```bash
+POST /api/analyze/stream
+{"user_input": "Analyze NVDA"}
+# Returns NDJSON stream: {"type":"log",...} then {"type":"result",...}
+```
+
+### Approve / reject trade
+```bash
+POST /api/approve/{request_id}
+{"approved": true, "approver_notes": "Strong fundamentals confirmed."}
+```
+
+### Execute approved trade
+```bash
+POST /api/execute/{request_id}
+# Calls broker.place_order(), updates simulation ledger
+```
+
+### Portfolio
+```bash
+GET /api/portfolio
+# Returns holdings with live AV prices, P&L, HHI concentration score
+```
+
+---
+
+## 📋 Track 4 Evaluation Checklist
+
+| Criterion | Implementation | Status |
+|---|---|---|
+| Ambiguous input handling | 4-path Qwen triage with confidence score | ✅ |
+| External tool invocation | Alpha Vantage + SEC EDGAR (real APIs) | ✅ |
+| Human-in-loop gates | Approval checkpoint + broker execution | ✅ |
+| Multi-agent orchestration | Tri-Agent adversarial committee | ✅ |
+| Robinhood MCP integration | `RobinhoodMCPClient` + `MockSimulationEngine` | ✅ |
+| Hallucination prevention | Shared evidence contract + citation system | ✅ |
+| Performance optimization | 3-way parallel fetch + parallel debate rounds | ✅ |
+| Production architecture | LangGraph, Pydantic, NDJSON streaming, Docker | ✅ |
 
 ---
 
 ## 📖 Documentation
 
-- **[SETUP.md](SETUP.md)** - Installation & detailed configuration
-- **[ARCHITECTURE.md](ARCHITECTURE.md)** - Design decisions
-- **[IMPLEMENTATION.md](IMPLEMENTATION.md)** - Technical details
+- [ARCHITECTURE.md](ARCHITECTURE.md) — Design decisions and component deep-dives
+- [IMPLEMENTATION.md](IMPLEMENTATION.md) — Technical implementation notes
+- [SETUP.md](SETUP.md) — Detailed installation guide
+- [DEPLOYMENT.md](DEPLOYMENT.md) — Docker and production deployment
 
 ---
 
 ## 🤝 Troubleshooting
 
-**"QWEN_API_KEY not set"**
-→ Add your API key to `.env` file
+**`DASHSCOPE_API_KEY not set`** → Add your key to `.env`
 
-**"Qwen API error: 401"**
-→ Check that your API key is valid in DashScope console
+**`Alpha Vantage rate limit`** → Free tier is 25 req/day. The system falls back gracefully to mock data.
 
-**"JSON parsing error"**
-→ Check logs; usually indicates API connection issue
+**`edgartools EDGAR identity`** → Set `EDGAR_IDENTITY` in `.env` or it uses the default demo identity.
 
-For more help, see [SETUP.md](SETUP.md#troubleshooting).
+**`Port 8002 in use`** → Set `BACKEND_PORT=8003` in `.env`
 
 ---
 
-## 📊 Performance
+## ⚡ Performance
 
-- **Triage:** 200-500ms
-- **Research:** 2-4s
-- **General Q:** 1-3s
-- **Total per query:** 3-8s
+| Operation | Time |
+|---|---|
+| Triage (Qwen structured output) | 300–600 ms |
+| 3-way parallel data fetch | 1–3 s |
+| Committee debate (2 rounds, parallel) | 4–8 s |
+| Portfolio analysis | 2–4 s |
+| **Full research query end-to-end** | **6–12 s** |
+

@@ -18,12 +18,16 @@ Supports human-in-loop checkpoints for critical recommendations (BUY/SELL).
 import json
 import sys
 import uuid
+import asyncio
+import queue as queue_module
+import threading
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 from contextlib import contextmanager
 
 from loguru import logger
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from pydantic import BaseModel, Field, ConfigDict
@@ -392,6 +396,40 @@ logger.add(
 )
 
 # ============================================================================
+# HELPERS
+# ============================================================================
+
+# Raw data keys from research_data that map directly to API sources.
+# We strip LLM-generated fields (committee_verdict, committee_transcript)
+# so the sidebar only shows verifiable ground-truth data.
+_AV_QUOTE_KEYS = {"ticker", "price", "change", "change_percent", "volume", "timestamp", "data_source", "fetched_at"}
+_AV_FUND_KEYS = {
+    "sector", "industry", "market_cap", "pe_ratio", "forward_pe", "eps",
+    "analyst_target_price", "week_52_high", "week_52_low", "profit_margin",
+    "quarterly_earnings_growth_yoy", "quarterly_revenue_growth_yoy",
+    "beta", "return_on_equity", "dividend_yield", "book_value",
+    "revenue_per_share_ttm",
+}
+
+
+def _extract_sources(research_data: dict) -> dict:
+    """
+    Pull the verifiable raw-data fields out of research_data so the frontend
+    can display citation panels without including LLM-generated content.
+    """
+    if not research_data:
+        return {}
+    av_quote = {k: research_data[k] for k in _AV_QUOTE_KEYS if k in research_data}
+    av_fund = {k: research_data[k] for k in _AV_FUND_KEYS if k in research_data}
+    sec = research_data.get("sec_filings", {})
+    return {
+        "av_quote": av_quote or None,
+        "av_fundamentals": av_fund or None,
+        "sec_filings": sec if sec.get("available") else None,
+    }
+
+
+# ============================================================================
 # ENDPOINTS
 # ============================================================================
 
@@ -407,6 +445,103 @@ async def health_check():
         "status": "healthy",
         "service": "corporate-intelligence-engine",
         "timestamp": datetime.now().isoformat()
+    }
+
+
+@app.get("/api/portfolio", tags=["Portfolio"])
+async def get_portfolio():
+    """
+    Return current simulation portfolio enriched with live prices.
+
+    Fetches account holdings from the MockSimulationEngine, pulls live
+    quotes for every position in parallel (Alpha Vantage), and returns
+    computed market values, allocation percentages, unrealised P&L, and
+    an overall risk score — ready for the frontend to display immediately
+    without going through the full orchestrator chat flow.
+    """
+    import concurrent.futures as _cf
+    from app.trading import get_broker_for_user, get_account_id_for_user
+    from app.tools import financial_tools
+
+    broker = get_broker_for_user()
+    account_id = get_account_id_for_user()
+    account_info = await broker.get_account_info(account_id)
+
+    positions: dict = account_info.get("positions", {})
+    cash: float = float(account_info.get("cash", 0.0))
+
+    if not positions:
+        return {
+            "holdings": [],
+            "cash": cash,
+            "cash_pct": 100.0,
+            "total_value": cash,
+            "invested_value": 0.0,
+            "total_pnl": 0.0,
+            "total_pnl_pct": 0.0,
+            "risk_level": "N/A",
+            "num_positions": 0,
+        }
+
+    # Fetch live prices in parallel
+    tickers = list(positions.keys())
+    loop = asyncio.get_event_loop()
+    with _cf.ThreadPoolExecutor(max_workers=min(len(tickers), 5)) as pool:
+        futures = {t: loop.run_in_executor(pool, financial_tools.get_stock_data, t) for t in tickers}
+        price_data = {t: await f for t, f in futures.items()}
+
+    holdings = []
+    invested_value = 0.0
+    for ticker, pos in positions.items():
+        shares = float(pos.get("quantity", 0))
+        avg_cost = float(pos.get("average_cost", 0))
+        live_price = float(price_data[ticker].get("price", avg_cost))
+        market_val = shares * live_price
+        cost_basis = shares * avg_cost
+        unrealised_pnl = market_val - cost_basis
+        unrealised_pct = (unrealised_pnl / cost_basis * 100) if cost_basis else 0.0
+        invested_value += market_val
+        holdings.append({
+            "ticker": ticker,
+            "shares": round(shares, 6),
+            "avg_cost": round(avg_cost, 4),
+            "live_price": round(live_price, 4),
+            "market_value": round(market_val, 2),
+            "cost_basis": round(cost_basis, 2),
+            "unrealised_pnl": round(unrealised_pnl, 2),
+            "unrealised_pct": round(unrealised_pct, 2),
+            "allocation_pct": 0.0,  # filled below
+        })
+
+    holdings.sort(key=lambda h: h["market_value"], reverse=True)
+    total_value = invested_value + cash
+    for h in holdings:
+        h["allocation_pct"] = round((h["market_value"] / total_value * 100) if total_value else 0.0, 1)
+    cash_pct = round((cash / total_value * 100) if total_value else 0.0, 1)
+
+    total_pnl = sum(h["unrealised_pnl"] for h in holdings)
+    cost_total = sum(h["cost_basis"] for h in holdings)
+    total_pnl_pct = round((total_pnl / cost_total * 100) if cost_total else 0.0, 2)
+
+    max_alloc = max(h["allocation_pct"] for h in holdings)
+    n = len(holdings)
+    if max_alloc > 50 or n < 2:
+        risk_level = "HIGH"
+    elif max_alloc > 30 or n < 4:
+        risk_level = "MEDIUM"
+    else:
+        risk_level = "LOW"
+
+    return {
+        "holdings": holdings,
+        "cash": round(cash, 2),
+        "cash_pct": cash_pct,
+        "total_value": round(total_value, 2),
+        "invested_value": round(invested_value, 2),
+        "total_pnl": round(total_pnl, 2),
+        "total_pnl_pct": total_pnl_pct,
+        "risk_level": risk_level,
+        "num_positions": n,
     }
 
 
@@ -533,6 +668,126 @@ async def analyze(request: AnalysisRequest) -> AnalysisResponse:
             error_message=error_msg,
             execution_time_ms=execution_time,
         )
+
+
+@app.post("/api/analyze/stream", tags=["Analysis"])
+async def analyze_stream(request: AnalysisRequest):
+    """
+    Streaming variant of /api/analyze.
+
+    Runs the orchestrator graph in a background thread and streams agent
+    reasoning logs to the client as newline-delimited JSON (NDJSON) events in
+    real time. A final event of type "result" carries the same payload shape as
+    the AnalysisResponse returned by /api/analyze (including pending_approval).
+
+    Event shapes (one JSON object per line):
+        {"type": "log", "message": "<formatted log line>"}
+        {"type": "result", "result": { ...AnalysisResponse fields... }}
+    """
+    start_time = datetime.now()
+    request_id = request_tracker.create_request(request.user_input)
+
+    log_queue: "queue_module.Queue[str]" = queue_module.Queue()
+    done_event = threading.Event()
+    container: Dict[str, Any] = {}
+
+    def _format_record(message) -> str:
+        r = message.record
+        return (
+            f"{r['time']:%Y-%m-%d %H:%M:%S} | {r['level'].name:<8} | "
+            f"{r['name']}:{r['function']} - {r['message']}"
+        )
+
+    def _sink(message):
+        try:
+            log_queue.put_nowait(_format_record(message))
+        except Exception:
+            pass
+
+    def _run_graph():
+        sink_id = logger.add(_sink, level="INFO")
+        try:
+            logger.info(f"Streaming analysis started for request {request_id}")
+            logger.info(f"User Input: {request.user_input}")
+            graph = build_graph()
+            initial_state: GraphState = {
+                "user_input": request.user_input,
+                "current_target_ticker": "",
+                "routing_decision": "",
+                "research_data": {},
+                "report_markdown": "",
+                "error_count": 0,
+                "pending_approval": None,
+                "approval_status": None,
+            }
+            final_state = graph.invoke(initial_state)
+            container["final_state"] = final_state
+            logger.info("Graph execution complete")
+        except Exception as e:
+            container["error"] = str(e)
+            logger.error(f"Streaming graph execution failed: {e}")
+        finally:
+            logger.remove(sink_id)
+            done_event.set()
+
+    async def event_generator():
+        thread = threading.Thread(target=_run_graph, daemon=True)
+        thread.start()
+
+        # Drain the log queue and stream messages until the graph finishes
+        while True:
+            try:
+                while True:
+                    msg = log_queue.get_nowait()
+                    yield json.dumps({"type": "log", "message": msg}) + "\n"
+            except queue_module.Empty:
+                pass
+
+            if done_event.is_set() and log_queue.empty():
+                break
+            await asyncio.sleep(0.15)
+
+        execution_time = (datetime.now() - start_time).total_seconds() * 1000
+
+        if "error" in container:
+            payload = {
+                "request_id": request_id,
+                "status": "error",
+                "routing_decision": "error",
+                "report_markdown": "",
+                "error_message": f"Orchestrator execution failed: {container['error']}",
+                "execution_time_ms": execution_time,
+                "pending_approval": None,
+                "approval_status": None,
+            }
+        else:
+            final_state = container.get("final_state", {})
+            response_status = "success"
+            if final_state.get("approval_status") == "pending":
+                response_status = "awaiting_approval"
+                if final_state.get("pending_approval"):
+                    pending_trade_store.store_pending_trade(
+                        request_id, final_state.get("pending_approval")
+                    )
+            elif final_state.get("error_count", 0) > 0:
+                response_status = "partial"
+
+            payload = {
+                "request_id": request_id,
+                "status": response_status,
+                "routing_decision": final_state.get("routing_decision", "unknown"),
+                "report_markdown": final_state.get("report_markdown", ""),
+                "error_message": "",
+                "execution_time_ms": execution_time,
+                "pending_approval": final_state.get("pending_approval"),
+                "approval_status": final_state.get("approval_status"),
+                "sources": _extract_sources(final_state.get("research_data", {})),
+            }
+
+        request_tracker.complete_request(request_id)
+        yield json.dumps({"type": "result", "result": payload}) + "\n"
+
+    return StreamingResponse(event_generator(), media_type="application/x-ndjson")
 
 
 @app.get("/api/requests/{request_id}/status", tags=["Request Tracking"])

@@ -127,6 +127,8 @@ if "trade_completed" not in st.session_state:
 API_BASE_URL = "http://localhost:8002"
 API_HEALTH_ENDPOINT = f"{API_BASE_URL}/health"
 API_ANALYZE_ENDPOINT = f"{API_BASE_URL}/api/analyze"
+API_ANALYZE_STREAM_ENDPOINT = f"{API_BASE_URL}/api/analyze/stream"
+API_PORTFOLIO_ENDPOINT = f"{API_BASE_URL}/api/portfolio"
 API_STATUS_ENDPOINT = f"{API_BASE_URL}/api/requests"
 REQUEST_TIMEOUT = 600  # seconds (10 minutes max - increased for OAuth/MCP calls)
 INACTIVITY_TIMEOUT = 180  # seconds (3 minutes of no log updates = stuck)
@@ -152,60 +154,224 @@ def check_api_health() -> bool:
         return False
 
 
+_LOG_SEPARATORS = frozenset({"=", "-", " ", "\n"})
+
+
+def _extract_log_message(raw_line: str) -> tuple:
+    """
+    Parse a loguru line and return (level, message).
+    Returns ("", "") for separator lines / empty messages.
+
+    Input: "2026-06-30 23:06:21 | INFO     | module:func - message text"
+    """
+    level = "INFO"
+    if "| WARNING " in raw_line or "| WARN " in raw_line:
+        level = "WARNING"
+    elif "| ERROR " in raw_line:
+        level = "ERROR"
+
+    msg = raw_line.split(" - ", 1)[1].strip() if " - " in raw_line else raw_line.strip()
+
+    if not msg or set(msg) <= _LOG_SEPARATORS:
+        return "", ""
+    return level, msg
+
+
+def _format_agent_step(level: str, msg: str) -> str:
+    """
+    Map a backend log message to a clean, icon-prefixed display line.
+    Returns "" to skip the line entirely.
+    """
+    m = msg.strip()
+
+    # ── Hard skips (internal plumbing / separators) ──────────────────────────
+    _skip = (
+        "BUILDING STATE GRAPH", "GRAPH COMPILATION",
+        "Building state graph", "Executing orchestrator graph",
+        "[ENTERING ", "[CONDITIONAL ROUTING]", "[CONDITIONAL EDGE]",
+        "NODE COMPLETE", "[REPORTING NODE", "Report generation complete",
+        "Using pre-generated report", "Streaming analysis started",
+        "[EXTERNAL TOOL SUCCESS]", "Retrieved REAL data:",
+        "[EXTERNAL TOOL] Fetching REAL",
+        "Qwen Response:", "Qwen response received",
+        "[COMMITTEE] Convening", "[COMMITTEE] Deliberation complete",
+        "APPROVAL EXECUTION NODE", "NO EXECUTION",
+        "preserving existing report",
+    )
+    if any(s in m for s in _skip):
+        return ""
+
+    # ── Graph wiring details → collapse to one summary line ──────────────────
+    # Individual ✓ messages from build_graph (nodes, edges, entry point) are
+    # implementation noise. Suppress them all; "Graph compiled" emits the summary.
+    if m.startswith("✓ ") or m.startswith("✓"):
+        return ""   # suppressed — summary fires on "Graph compiled" below
+    if "Graph compiled" in m:
+        return "🔧 **Analysis pipeline ready**"
+
+    # ── Errors / Warnings ────────────────────────────────────────────────────
+    if level == "ERROR":
+        return f"🔴 **Error:** {m}"
+    if level == "WARNING" and "[CHECKPOINT]" not in m and "[SKIPPING]" not in m:
+        return f"⚠️ {m}"
+
+    # ── User query ───────────────────────────────────────────────────────────
+    if m.startswith("User Input:"):
+        return f"💬 **Query:** {m.split(':', 1)[1].strip()}"
+
+    # ── Triage / routing ─────────────────────────────────────────────────────
+    if "Invoking Qwen LLM for structured routing" in m:
+        return "🧭 Determining intent and routing..."
+    if "Extracted Ticker:" in m:
+        return f"🎯 **Ticker identified:** {m.split(':', 1)[1].strip()}"
+    if "Routing Decision:" in m:
+        decision = m.split(":", 1)[1].strip()
+        label = {"research": "Investment Research", "general_q": "General Q&A",
+                 "trading": "Direct Trade", "portfolio": "Portfolio Analysis"}.get(decision.lower(), decision.capitalize())
+        return f"🔀 **Routing →** {label}"
+    if "Confidence:" in m:
+        return f"📊 {m}"
+    if "Reasoning:" in m:
+        text = m.split(":", 1)[1].strip()
+        return f"💭 _{text}_"
+
+    # ── External data ─────────────────────────────────────────────────────────
+    if "[EXTERNAL TOOL] Calling Alpha Vantage" in m:
+        return "📡 **Fetching live market data + fundamentals** (Alpha Vantage + SEC EDGAR)..."
+    if "[EXTERNAL TOOL RESULT]" in m:
+        source = m.split("]", 1)[1].strip()
+        return f"✅ **Data source:** {source}"
+    if "[SEC] Loaded" in m:
+        return f"📑 {m.split('] ', 1)[1].strip()}"
+    if "[SEC] EDGAR fetch failed" in m or "[SEC] No 10-Q" in m:
+        return f"⚠️ SEC filings unavailable — using market data only"
+    if m.strip().startswith("Price:"):
+        return f"&nbsp;&nbsp;&nbsp;💵 {m.strip()}"
+    if m.strip().startswith("Change:"):
+        return f"&nbsp;&nbsp;&nbsp;📈 {m.strip()}"
+    if m.strip().startswith("Volume:"):
+        return f"&nbsp;&nbsp;&nbsp;📊 {m.strip()}"
+    if m.strip().startswith("P/E Ratio:"):
+        return f"&nbsp;&nbsp;&nbsp;📐 {m.strip()}"
+    if m.strip().startswith("EPS:"):
+        return f"&nbsp;&nbsp;&nbsp;💰 {m.strip()}"
+    if m.strip().startswith("Analyst Target:"):
+        return f"&nbsp;&nbsp;&nbsp;🎯 {m.strip()}"
+    if m.strip().startswith("Sector:"):
+        return f"&nbsp;&nbsp;&nbsp;🏭 {m.strip()}"
+
+    # ── LLM calls ─────────────────────────────────────────────────────────────
+    if "Calling Qwen" in m and "structured output" in m:
+        return "🤖 **Qwen LLM** thinking..."
+    if "Invoking Qwen" in m:
+        return "🤖 **Qwen LLM** processing..."
+
+    # ── Investment Committee ──────────────────────────────────────────────────
+    if "Convening Tri-Agent Investment Committee" in m:
+        return "🏛️ **Convening Investment Committee** — Bull vs Bear vs Director"
+    if "[COMMITTEE] Debate rounds:" in m:
+        rounds = m.split(":", 1)[1].strip()
+        return f"&nbsp;&nbsp;&nbsp;🔄 Running **{rounds}** debate rounds"
+    if "[COMMITTEE] Bull Analyst delivered" in m:
+        r = m.rsplit("round", 1)[-1].strip().split()[0]
+        return f"&nbsp;&nbsp;&nbsp;🟢 **Bull Analyst** — Round {r} argument delivered"
+    if "[COMMITTEE] Bear Auditor delivered" in m:
+        r = m.rsplit("round", 1)[-1].strip().split()[0]
+        return f"&nbsp;&nbsp;&nbsp;🔴 **Bear Auditor** — Round {r} argument delivered"
+    if "[COMMITTEE] Director verdict:" in m:
+        v = m.split(":", 1)[1].strip()
+        return f"&nbsp;&nbsp;&nbsp;⚖️ **Director verdict:** {v}"
+    if "Committee reached verdict:" in m:
+        v = m.split(":", 1)[1].strip()
+        return f"🏆 **Committee verdict:** {v}"
+    if "[NO CHECKPOINT]" in m:
+        return f"✅ {m.replace('[NO CHECKPOINT] ', '')}"
+
+    # ── Human-in-loop checkpoint ──────────────────────────────────────────────
+    if "[CHECKPOINT]" in m or "[SKIPPING]" in m:
+        text = m.replace("[CHECKPOINT] ", "").replace("[SKIPPING] ", "")
+        return f"🔒 {text}"
+    if "Approval request" in m and "created" in m:
+        return f"🔒 **Approval gate opened** — awaiting human decision"
+
+    # ── Graph execution complete ──────────────────────────────────────────────
+    if "Graph execution complete" in m:
+        return "✅ **Analysis complete**"
+
+    # ── Fallback: show as-is (indented, smaller) ─────────────────────────────
+    return f"&emsp;{m}"
+
+
 def call_analysis_api_with_streaming(user_input: str, log_placeholder) -> Optional[dict]:
     """
-    Call the FastAPI backend and stream logs in real-time via polling.
-    
-    Note: The backend currently blocks on the full response, so polling
-    happens AFTER the request completes. For true streaming, the backend
-    would need to be async and return request_id immediately.
-    
+    Call the streaming backend endpoint and render agent logs LIVE as they arrive.
+
+    Consumes newline-delimited JSON (NDJSON) events from /api/analyze/stream:
+        {"type": "log", "message": ...}   -> appended to the live log view
+        {"type": "result", "result": ...} -> the final AnalysisResponse payload
+
     Args:
         user_input: User query
-        log_placeholder: Streamlit placeholder to update logs in real-time
-        
+        log_placeholder: Streamlit placeholder updated in real-time with logs
+
     Returns:
         Final response JSON if successful, None otherwise
     """
     try:
         payload = {"user_input": user_input}
-        
-        st.info("📤 Sending request to backend (this may take 60-120 seconds)...")
-        
-        # The POST request will block until the entire analysis is complete
-        response = requests.post(
-            API_ANALYZE_ENDPOINT,
+        logs: list = []       # raw log lines (kept for metadata)
+        steps: list = []      # cleaned display steps
+        final_result = None
+
+        with requests.post(
+            API_ANALYZE_STREAM_ENDPOINT,
             json=payload,
             timeout=REQUEST_TIMEOUT,
-        )
-        
-        if response.status_code == 200:
-            result = response.json()
-            request_id = result.get("request_id")
-            
-            st.success(f"✓ Request complete! Request ID: {request_id}")
-            
-            # Display all captured logs from the response
-            all_logs = result.get("logs", [])
-            
-            if all_logs:
-                log_text = "\n".join(all_logs)
-                with log_placeholder.container():
-                    st.code(log_text, language="log")
-                st.success(f"✓ {len(all_logs)} log entries captured")
-            else:
-                st.warning("No logs were captured")
-            
-            return result
-            
-        else:
-            st.error(f"❌ API Error: {response.status_code}")
-            try:
-                st.write("Response:", response.json())
-            except:
-                st.write("Response:", response.text)
-            return None
-            
+            stream=True,
+        ) as response:
+            if response.status_code != 200:
+                st.error(f"❌ API Error: {response.status_code}")
+                try:
+                    st.write("Response:", response.json())
+                except Exception:
+                    st.write("Response:", response.text)
+                return None
+
+            for line in response.iter_lines(decode_unicode=True):
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                event_type = event.get("type")
+                if event_type == "log":
+                    raw = event.get("message", "")
+                    logs.append(raw)
+                    level, msg = _extract_log_message(raw)
+                    if msg:
+                        step = _format_agent_step(level, msg)
+                        if step:
+                            steps.append(step)
+                            log_placeholder.markdown("\n\n".join(steps[-25:]))
+                elif event_type == "result":
+                    final_result = event.get("result")
+
+        if final_result is not None:
+            # Attach the full streamed log history for downstream display
+            final_result.setdefault("logs", logs)
+            # Persist raw sources so the sidebar citation panel can display them
+            if final_result.get("sources"):
+                st.session_state.last_sources = final_result["sources"]
+                st.session_state.last_sources_ticker = (
+                    final_result.get("routing_decision", "")
+                )
+            return final_result
+
+        st.warning("⚠️ Stream ended without a final result.")
+        return None
+
     except requests.exceptions.ConnectionError:
         st.error(
             "❌ **Backend Connection Error**: Could not reach the FastAPI server. "
@@ -215,9 +381,9 @@ def call_analysis_api_with_streaming(user_input: str, log_placeholder) -> Option
         return None
     except requests.exceptions.Timeout:
         st.error(
-            "❌ **Timeout Error**: The backend took longer than 5 minutes to respond. "
+            "❌ **Timeout Error**: The backend took longer than 10 minutes to respond. "
             "\n\nPossible causes:"
-            "\n- Qwen LLM is taking too long (typical: 60-120 seconds)"
+            "\n- Qwen LLM is taking too long (committee runs multiple calls)"
             "\n- Backend crashed or is stuck"
             "\n- Network connection lost"
             "\n\nCheck the backend terminal for errors."
@@ -288,7 +454,7 @@ def call_analysis_api(user_input: str) -> Optional[dict]:
 
 def get_routing_badge_class(routing_decision: str) -> str:
     """Get CSS class for routing decision badge."""
-    if routing_decision == "research":
+    if routing_decision in ("research", "completed", "awaiting_approval"):
         return "research-badge"
     elif routing_decision == "general_q":
         return "general-badge"
@@ -298,8 +464,8 @@ def get_routing_badge_class(routing_decision: str) -> str:
 
 def get_routing_badge_label(routing_decision: str) -> str:
     """Get display label for routing decision."""
-    if routing_decision == "research":
-        return "🔬 Research"
+    if routing_decision in ("research", "completed", "awaiting_approval"):
+        return "🏛️ Investment Committee"
     elif routing_decision == "general_q":
         return "💡 General Question"
     else:
@@ -351,28 +517,171 @@ with st.sidebar:
             "uvicorn backend:app --reload\n"
             "```"
         )
-    
+
     st.divider()
-    
+
+    # ── Portfolio Panel ──────────────────────────────────────────────────
+    st.markdown("### 📊 Portfolio")
+    _refresh_key = "portfolio_refresh"
+    if st.button("🔄 Refresh Portfolio", key=_refresh_key, use_container_width=True):
+        st.session_state.pop("portfolio_data", None)
+
+    if st.session_state.get("api_available"):
+        if "portfolio_data" not in st.session_state:
+            try:
+                _resp = requests.get(API_PORTFOLIO_ENDPOINT, timeout=30)
+                if _resp.status_code == 200:
+                    st.session_state.portfolio_data = _resp.json()
+                else:
+                    st.session_state.portfolio_data = None
+            except Exception:
+                st.session_state.portfolio_data = None
+
+        _pf = st.session_state.get("portfolio_data")
+        if _pf:
+            _pnl = _pf.get("total_pnl", 0)
+            _pnl_pct = _pf.get("total_pnl_pct", 0)
+            _risk = _pf.get("risk_level", "N/A")
+            _risk_color = {"HIGH": "#dc3545", "MEDIUM": "#fd7e14", "LOW": "#28a745"}.get(_risk, "#666")
+
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Total Value", f"${_pf.get('total_value', 0):,.2f}")
+            with col2:
+                st.metric("P&L", f"${_pnl:+,.2f}", delta=f"{_pnl_pct:+.1f}%")
+
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Cash", f"${_pf.get('cash', 0):,.2f}")
+            with col2:
+                st.markdown(
+                    f"**Risk**&nbsp; "
+                    f"<span style='color:{_risk_color};font-weight:bold'>{_risk}</span>",
+                    unsafe_allow_html=True,
+                )
+
+            holdings = _pf.get("holdings", [])
+            if holdings:
+                st.markdown("**Positions**")
+                for h in holdings:
+                    pnl_color = "#28a745" if h["unrealised_pnl"] >= 0 else "#dc3545"
+                    st.markdown(
+                        f"**{h['ticker']}** &nbsp; {h['allocation_pct']}% &nbsp;"
+                        f"<span style='color:{pnl_color}'>{h['unrealised_pnl']:+.2f}</span>",
+                        unsafe_allow_html=True,
+                    )
+            else:
+                st.caption("No open positions")
+
+            if st.button("🤖 Deep Analysis", key="portfolio_deep", use_container_width=True):
+                # Pre-fill the chat with a portfolio analysis request
+                st.session_state["_portfolio_query"] = "Analyze my portfolio"
+                st.rerun()
+        else:
+            st.caption("Could not load portfolio data")
+    else:
+        st.caption("Backend offline")
+
+    st.divider()
+
+    # ── Citation / Sources Panel ─────────────────────────────────────────
+    st.markdown("### 📚 Sources")
+    _sources = st.session_state.get("last_sources")
+    if _sources:
+        st.caption("Raw data fed to the AI — click to expand")
+
+        # [1] Alpha Vantage Live Quote
+        av_q = _sources.get("av_quote") or {}
+        if av_q:
+            with st.expander(f"**[1]** Alpha Vantage — Live Quote", expanded=False):
+                st.markdown(f"**Ticker:** {av_q.get('ticker', 'N/A')}")
+                st.markdown(f"**Price:** ${av_q.get('price', 'N/A')}")
+                st.markdown(f"**Change:** {av_q.get('change', 'N/A')} ({av_q.get('change_percent', 'N/A')}%)")
+                st.markdown(f"**Volume:** {av_q.get('volume', 'N/A'):,}" if isinstance(av_q.get('volume'), int) else f"**Volume:** {av_q.get('volume', 'N/A')}")
+                st.markdown(f"**Trading Day:** {av_q.get('timestamp', 'N/A')}")
+                st.markdown(f"**Fetched at:** {av_q.get('fetched_at', 'N/A')}")
+                st.caption(f"Source: {av_q.get('data_source', 'Alpha Vantage')}")
+
+        # [2] Alpha Vantage Company Overview
+        av_f = _sources.get("av_fundamentals") or {}
+        if av_f:
+            with st.expander("**[2]** Alpha Vantage — Company Overview", expanded=False):
+                _fund_labels = {
+                    "sector": "Sector", "industry": "Industry",
+                    "market_cap": "Market Cap", "pe_ratio": "P/E Ratio",
+                    "forward_pe": "Forward P/E", "eps": "EPS (TTM)",
+                    "analyst_target_price": "Analyst Target",
+                    "week_52_high": "52-Week High", "week_52_low": "52-Week Low",
+                    "profit_margin": "Profit Margin",
+                    "quarterly_earnings_growth_yoy": "Earnings Growth YoY",
+                    "quarterly_revenue_growth_yoy": "Revenue Growth YoY",
+                    "beta": "Beta", "return_on_equity": "Return on Equity",
+                    "dividend_yield": "Dividend Yield",
+                }
+                for key, label in _fund_labels.items():
+                    val = av_f.get(key)
+                    if val:
+                        prefix = "$" if key in ("market_cap", "analyst_target_price", "eps", "week_52_high", "week_52_low") else ""
+                        st.markdown(f"**{label}:** {prefix}{val}")
+                st.caption("Source: Alpha Vantage OVERVIEW endpoint")
+
+        # [3+] SEC 10-Q Filings
+        sec = _sources.get("sec_filings") or {}
+        if sec.get("available") and sec.get("quarters"):
+            _sec_labels = {
+                "revenue": "Revenue", "net_income": "Net Income",
+                "gross_profit": "Gross Profit", "operating_income": "Operating Income",
+                "rd_expense": "R&D Expense", "free_cash_flow": "Free Cash Flow",
+                "cash": "Cash & Equivalents", "long_term_debt": "Long-term Debt",
+                "total_assets": "Total Assets", "shareholders_equity": "Shareholders' Equity",
+                "operating_cash_flow": "Operating Cash Flow",
+                "eps_diluted": "EPS (Diluted)",
+            }
+            from app.tools.sec_tools import fmt_sec_value
+            for i, q in enumerate(sec["quarters"]):
+                cite_num = 3 + i
+                with st.expander(
+                    f"**[{cite_num}]** SEC 10-Q — Q-{i+1} "
+                    f"(period ending {q.get('period', 'N/A')})",
+                    expanded=False,
+                ):
+                    st.markdown(f"**Period end:** {q.get('period', 'N/A')}")
+                    st.markdown(f"**Filed:** {q.get('filed', 'N/A')}")
+                    st.markdown("---")
+                    for key, label in _sec_labels.items():
+                        val = q.get(key)
+                        if val is None:
+                            continue
+                        if key == "eps_diluted":
+                            st.markdown(f"**{label}:** ${val:.2f}")
+                        else:
+                            st.markdown(f"**{label}:** {fmt_sec_value(val)}")
+                    st.caption("Source: SEC EDGAR via edgartools (XBRL)")
+    else:
+        st.caption("No sources loaded yet. Run an analysis query to see citation data here.")
+
+    st.divider()
+
+    # ── Help ─────────────────────────────────────────────────────────────
     st.markdown("### 📖 Help")
     st.markdown("""
     **What can I ask?**
     
     **Research Queries:**
     - "Analyze NVDA earnings"
-    - "What's the current price of TSLA?"
-    - "Show me Tesla stock forecast"
+    - "Should I buy TSLA?"
     
+    **Portfolio:**
+    - "Show me my portfolio"
+    - "Analyze my positions"
+    
+    **Direct Trades:**
+    - "Buy $50 of AAPL"
+    - "Sell 5 shares of NVDA"
+
     **General Questions:**
-    - "Top ML frameworks 2024?"
-    - "What is quantitative analysis?"
-    - "Explain financial derivatives"
-    
-    **How it works:**
-    1. Enter your query
-    2. Agent triages request (research vs general)
-    3. Routes to appropriate analyzer
-    4. Generates structured report
+    - "What is market cap?"
+    - "Explain P/E ratio"
     """)
     
     st.divider()
@@ -380,7 +689,7 @@ with st.sidebar:
     st.markdown("### 🔗 Links")
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.markdown("[📚 Docs](http://localhost:8000/docs)")
+        st.markdown("[📚 Docs](http://localhost:8002/docs)")
     with col2:
         st.markdown("[🔄 Reload](javascript:location.reload())")
     with col3:
@@ -430,10 +739,15 @@ for message in st.session_state.messages:
 st.markdown("---")
 
 # Chat input box
+# Chat input box — also accepts pre-fills from sidebar "Deep Analysis" button
 user_input = st.chat_input(
-    "Enter a ticker or analysis prompt (e.g., Analyze NVDA)...",
+    "Enter a ticker or analysis prompt (e.g., Analyze NVDA, show my portfolio)...",
     key="user_input",
 )
+
+# Allow sidebar "Deep Analysis" button to inject a query
+if not user_input and st.session_state.pop("_portfolio_query", None):
+    user_input = "Analyze my portfolio"
 
 if user_input:
     # Reset trade completion flag for new requests
@@ -466,32 +780,7 @@ if user_input:
             # Call the API with streaming logs
             response = call_analysis_api_with_streaming(user_input, log_placeholder)
             
-            # AGGRESSIVE DEBUG
-            st.write("---")
-            st.write("### 🚨 AGGRESSIVE DEBUG OUTPUT")
-            st.write(f"✓ Response object type: `{type(response)}`")
-            st.write(f"✓ Response is None: `{response is None}`")
             if response:
-                st.write(f"✓ Response status: `{response.get('status')}`")
-                st.write(f"✓ Response keys: `{list(response.keys())}`")
-                st.write(f"✓ pending_approval: `{response.get('pending_approval')}`")
-                st.write(f"✓ request_id: `{response.get('request_id')}`")
-            st.write("---")
-            
-            if response:
-                st.write(f"**[DEBUG] Response Status:** `{response.get('status')}`")
-                st.write(f"**[DEBUG] Pending Approval:** `{response.get('pending_approval')}`")
-                
-                # Display logs from response
-                logs = response.get("logs", [])
-                if logs:
-                    st.write("---")
-                    st.write("### 📋 Captured Agent Logs")
-                    log_text = "\n".join(logs)
-                    st.code(log_text, language="log")
-                else:
-                    st.warning("⚠️ No logs captured in response")
-                
                 # Check for errors
                 if response.get("status") == "error":
                     status.update(
@@ -503,7 +792,6 @@ if user_input:
                 
                 # Check for approval pending
                 elif response.get("status") == "awaiting_approval":
-                    st.info("✅ Status check passed: awaiting_approval detected")
                     status.update(
                         label="⏳ Awaiting Human Approval",
                         state="running",
@@ -651,42 +939,43 @@ if user_input:
 
                 
                 else:
-                    # Update status to complete
+                    # Close the status container — report renders below it
                     status.update(
                         label=f"✅ Analysis Complete! ({response.get('execution_time_ms', 0):.1f}ms)",
                         state="complete",
                         expanded=False,
                     )
-                    
-                    # Add assistant response to chat history
-                    st.session_state.messages.append({
-                        "role": "assistant",
-                        "content": response.get("report_markdown", ""),
-                        "metadata": {
-                            "routing_decision": response.get("routing_decision", ""),
-                            "logs": response.get("logs", []),
-                            "execution_time_ms": response.get("execution_time_ms", 0),
-                        }
-                    })
-                    
-                    # Display final report
-                    st.markdown("---")
-                    st.markdown("### 📊 Final Report")
-                    
-                    st.markdown(
-                        f"<div class='routing-badge {get_routing_badge_class(response.get('routing_decision'))}'>"
-                        f"{get_routing_badge_label(response.get('routing_decision'))}"
-                        f"</div>",
-                        unsafe_allow_html=True,
-                    )
-                    
-                    st.markdown(response.get("report_markdown", ""))
             else:
                 status.update(
                     label="❌ Request Failed",
                     state="error",
                     expanded=False,
                 )
+
+        # ── Report rendering (OUTSIDE status container so it's never collapsed) ──
+        if response and response.get("status") not in ("error", "awaiting_approval"):
+            report_md = response.get("report_markdown", "")
+
+            # Save to chat history
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": report_md,
+                "metadata": {
+                    "routing_decision": response.get("routing_decision", ""),
+                    "logs": response.get("logs", []),
+                    "execution_time_ms": response.get("execution_time_ms", 0),
+                }
+            })
+
+            # Render report in a chat bubble
+            with st.chat_message("assistant"):
+                st.markdown(
+                    f"<div class='routing-badge {get_routing_badge_class(response.get('routing_decision'))}'>"
+                    f"{get_routing_badge_label(response.get('routing_decision'))}"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+                st.markdown(report_md)
 
 
 # =========================================================================
@@ -794,6 +1083,7 @@ if st.session_state.get("pending_approval_request") and not st.session_state.get
                             # Clear the approval request (but don't rerun yet)
                             st.session_state.pending_approval_request = None
                             st.session_state.trade_completed = True
+                            st.session_state.pop("portfolio_data", None)  # refresh sidebar
                         else:
                             error_resp = execute_response.json()
                             st.error(f"❌ Execution failed: {execute_response.status_code}")
@@ -822,6 +1112,7 @@ if st.session_state.get("pending_approval_request") and not st.session_state.get
                         # Clear the approval request (but don't rerun yet)
                         st.session_state.pending_approval_request = None
                         st.session_state.trade_completed = True
+                        st.session_state.pop("portfolio_data", None)  # refresh sidebar
                     else:
                         error_resp = reject_response.json()
                         st.error(f"Failed to submit rejection: {reject_response.status_code}")

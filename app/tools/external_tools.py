@@ -1,5 +1,6 @@
 """External tool integrations for business workflows."""
 
+import concurrent.futures as _futures
 import requests
 from typing import Dict, Any, Optional
 from datetime import datetime
@@ -18,16 +19,13 @@ class FinancialDataTools:
         
     def get_stock_data(self, ticker: str) -> Dict[str, Any]:
         """
-        Invoke REAL Alpha Vantage API to get stock data.
-        
-        This is a real external tool call, not mocked data.
-        Returns live market data for Qwen analysis.
+        Invoke REAL Alpha Vantage API to get stock quote data.
         
         Args:
             ticker: Stock symbol (e.g., "NVDA", "TSLA")
             
         Returns:
-            Dict with stock data including price, change, volume, etc.
+            Dict with price, change, volume, etc.
             Falls back to mock data if API is unavailable.
         """
         if not self.api_key:
@@ -38,7 +36,6 @@ class FinancialDataTools:
         try:
             logger.info(f"[EXTERNAL TOOL] Fetching REAL stock data for {ticker} from Alpha Vantage API...")
             
-            # Get latest quote from Alpha Vantage
             params = {
                 "function": "GLOBAL_QUOTE",
                 "symbol": ticker.upper(),
@@ -54,14 +51,12 @@ class FinancialDataTools:
             
             data = response.json()
             
-            # Check if we got valid data
             if "Global Quote" not in data or not data["Global Quote"]:
                 logger.warning(f"No data returned from Alpha Vantage for {ticker}")
                 return self._mock_stock_data(ticker)
             
             quote = data["Global Quote"]
             
-            # Parse response
             try:
                 price = float(quote.get("05. price", 0))
                 change = float(quote.get("09. change", 0))
@@ -90,25 +85,112 @@ class FinancialDataTools:
             
         except requests.exceptions.Timeout:
             logger.error(f"Alpha Vantage API timeout for {ticker}")
-            logger.info("Falling back to mock data")
             return self._mock_stock_data(ticker)
             
         except requests.exceptions.ConnectionError:
-            logger.error(f"Connection error to Alpha Vantage API")
-            logger.info("Falling back to mock data")
+            logger.error("Connection error to Alpha Vantage API")
             return self._mock_stock_data(ticker)
             
         except Exception as e:
             logger.error(f"Alpha Vantage API error: {type(e).__name__}: {str(e)}")
-            logger.info("Falling back to mock data")
             return self._mock_stock_data(ticker)
-    
+
+    def get_fundamental_data(self, ticker: str) -> Dict[str, Any]:
+        """
+        Fetch company fundamentals from the Alpha Vantage OVERVIEW endpoint.
+
+        Returns fields like P/E ratio, EPS, analyst target price, 52-week range,
+        revenue growth, profit margin, market cap, sector, and more.
+        Returns an empty dict silently on failure (non-critical enrichment).
+        """
+        if not self.api_key:
+            return {}
+
+        try:
+            params = {
+                "function": "OVERVIEW",
+                "symbol": ticker.upper(),
+                "apikey": self.api_key,
+            }
+            response = requests.get(self.base_url, params=params, timeout=self.timeout)
+            response.raise_for_status()
+            data = response.json()
+
+            if not data or "Symbol" not in data:
+                logger.warning(f"[EXTERNAL TOOL] No OVERVIEW data for {ticker} (may not be supported or rate-limited)")
+                return {}
+
+            def _f(key: str) -> Optional[str]:
+                val = data.get(key)
+                return val if val and val not in ("None", "-", "") else None
+
+            fundamentals = {}
+            _fields = {
+                "sector": "Sector",
+                "industry": "Industry",
+                "market_cap": "MarketCapitalization",
+                "pe_ratio": "PERatio",
+                "forward_pe": "ForwardPE",
+                "eps": "EPS",
+                "analyst_target_price": "AnalystTargetPrice",
+                "week_52_high": "52WeekHigh",
+                "week_52_low": "52WeekLow",
+                "revenue_per_share_ttm": "RevenuePerShareTTM",
+                "profit_margin": "ProfitMargin",
+                "quarterly_earnings_growth_yoy": "QuarterlyEarningsGrowthYOY",
+                "quarterly_revenue_growth_yoy": "QuarterlyRevenueGrowthYOY",
+                "beta": "Beta",
+                "dividend_yield": "DividendYield",
+                "return_on_equity": "ReturnOnEquityTTM",
+                "book_value": "BookValue",
+            }
+            for key, av_key in _fields.items():
+                val = _f(av_key)
+                if val is not None:
+                    fundamentals[key] = val
+
+            logger.info(
+                f"[EXTERNAL TOOL] Fundamentals for {ticker}: "
+                f"P/E={fundamentals.get('pe_ratio', 'N/A')}, "
+                f"EPS={fundamentals.get('eps', 'N/A')}, "
+                f"Analyst target=${fundamentals.get('analyst_target_price', 'N/A')}, "
+                f"Sector={fundamentals.get('sector', 'N/A')}"
+            )
+            return fundamentals
+
+        except Exception as e:
+            logger.warning(f"[EXTERNAL TOOL] Could not fetch fundamentals for {ticker}: {e}")
+            return {}
+
+    def get_enriched_stock_data(self, ticker: str) -> Dict[str, Any]:
+        """
+        Fetch quote + fundamentals + SEC filings in parallel and merge.
+
+        Runs three independent calls simultaneously:
+          1. GLOBAL_QUOTE  — live price, change %, volume
+          2. OVERVIEW      — P/E, EPS, analyst target, margins, etc.
+          3. SEC EDGAR     — last 2 quarters of 10-Q financial data
+        """
+        from app.tools.sec_tools import get_sec_filings  # local import avoids circular
+
+        with _futures.ThreadPoolExecutor(max_workers=3) as pool:
+            quote_future        = pool.submit(self.get_stock_data, ticker)
+            fundamentals_future = pool.submit(self.get_fundamental_data, ticker)
+            sec_future          = pool.submit(get_sec_filings, ticker, 2)
+
+            quote_data   = quote_future.result()
+            fundamentals = fundamentals_future.result()
+            sec_data     = sec_future.result()
+
+        if fundamentals:
+            quote_data.update(fundamentals)
+        if sec_data:
+            quote_data["sec_filings"] = sec_data
+
+        return quote_data
+
     def _mock_stock_data(self, ticker: str) -> Dict[str, Any]:
-        """
-        Fallback mock data when API fails or key is not set.
-        
-        In production, this would trigger an alert for missing/failed API integration.
-        """
+        """Fallback mock data when API fails or key is not set."""
         return {
             "ticker": ticker.upper(),
             "price": 150.25,

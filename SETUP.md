@@ -79,26 +79,33 @@ Edit `.env` with these required and optional settings:
 
 ```bash
 # ============================================================================
-# REQUIRED: Qwen LLM Configuration
+# REQUIRED: Qwen LLM (Alibaba DashScope International)
 # ============================================================================
 
-# Get from: https://dashscope.aliyun.com/
-QWEN_API_KEY=your_actual_api_key_here
+# Get from: https://dashscope-intl.aliyuncs.com/
+DASHSCOPE_API_KEY=your_dashscope_api_key_here
 
-# Available models: qwen-turbo, qwen-plus, qwen-max (default), qwen-max-longcontext
-QWEN_MODEL=qwen-max
+# Model — qwen3.7-plus is recommended for this project
+QWEN_MODEL=qwen3.7-plus
+DASHSCOPE_ENDPOINT=https://dashscope-intl.aliyuncs.com/compatible-mode/v1
 
-# Model parameters (0.0-2.0 for temperature)
+# Model sampling parameters
 QWEN_TEMPERATURE=0.7
 QWEN_TOP_P=0.85
+
+# ============================================================================
+# REQUIRED: Financial Data
+# ============================================================================
+
+# Get free key from: https://www.alphavantage.co/support/#api-key
+ALPHA_VANTAGE_API_KEY=your_alpha_vantage_key_here
 
 # ============================================================================
 # Backend Configuration
 # ============================================================================
 
 BACKEND_HOST=0.0.0.0
-BACKEND_PORT=8000
-BACKEND_RELOAD=true
+BACKEND_PORT=8002
 BACKEND_LOG_LEVEL=info
 
 # ============================================================================
@@ -107,6 +114,19 @@ BACKEND_LOG_LEVEL=info
 
 FRONTEND_HOST=localhost
 FRONTEND_PORT=8501
+
+# ============================================================================
+# Optional: Broker Mode
+# ============================================================================
+
+# simulation = paper trading with $10k balance (default, safe for demos)
+# robinhood  = live Robinhood trading (requires OAuth credentials below)
+BROKER_TYPE=simulation
+
+# Required only when BROKER_TYPE=robinhood
+# ROBINHOOD_CLIENT_ID=your_client_id
+# ROBINHOOD_CLIENT_SECRET=your_client_secret
+# ROBINHOOD_ACCOUNT_ID=your_account_id
 
 # ============================================================================
 # Development Settings
@@ -137,7 +157,7 @@ python backend.py
 Expected output:
 ```
 [INFO] Qwen initialized with model: qwen-max
-[INFO] Starting server on http://0.0.0.0:8000
+[INFO] Starting server on http://0.0.0.0:8002
 ```
 
 ### Terminal 2: Frontend UI
@@ -158,22 +178,18 @@ Open browser → `http://localhost:8501`
 
 ---
 
-## Qwen Models Explained
+## Qwen Models
 
-Choose based on your needs:
+| Model | Notes |
+|---|---|
+| **`qwen3.7-plus`** | **Used by this project** — strong reasoning, good cost/quality balance |
+| `qwen-turbo` | Fastest, cheapest — suitable for quick testing |
+| `qwen-plus` | Mid-tier quality |
+| `qwen-max` | Highest quality, higher cost |
 
-| Model | Context | Speed | Cost | Best For |
-|-------|---------|-------|------|----------|
-| `qwen-turbo` | 200K | Very Fast | Lowest | Quick testing |
-| `qwen-plus` | 200K | Fast | Low | General use |
-| **`qwen-max`** | 200K | Standard | Medium | **Default (recommended)** |
-| `qwen-max-longcontext` | 30K | Slower | Higher | Very long documents |
-
-**Default:** `qwen-max` balances quality and cost.
-
-Change in `.env`:
+Set in `.env`:
 ```bash
-QWEN_MODEL=qwen-turbo    # Faster, cheaper
+QWEN_MODEL=qwen3.7-plus   # default for this project
 ```
 
 ---
@@ -205,7 +221,7 @@ For financial analysis, use lower values (0.3-0.7).
 ### Test Backend
 
 ```bash
-curl http://localhost:8000/health
+curl http://localhost:8002/health
 ```
 
 Expected response:
@@ -216,7 +232,7 @@ Expected response:
 ### Test Qwen Integration
 
 ```bash
-curl -X POST http://localhost:8000/api/analyze \
+curl -X POST http://localhost:8002/api/analyze/stream \
   -H "Content-Type: application/json" \
   -d '{"user_input": "What is a PE ratio?"}'
 ```
@@ -290,9 +306,9 @@ Open `http://localhost:8501` and submit a query. You should see:
 
 **Solutions:**
 ```bash
-# Check if port 8000 is in use
+# Check if port 8002 is in use
 netstat -tuln | grep 8000  # macOS/Linux
-netstat -ano | findstr :8000  # Windows
+netstat -ano | findstr :8002  # Windows
 
 # Use different port
 BACKEND_PORT=8001 python backend.py
@@ -307,7 +323,7 @@ pip install --force-reinstall -r requirements.txt
 
 **Solutions:**
 1. Start backend first: `python backend.py`
-2. Verify backend is on `http://localhost:8000`
+2. Verify backend is on `http://localhost:8002`
 3. Check `BACKEND_PORT` matches in `.env`
 4. Look for backend error messages in Terminal 1
 
@@ -488,10 +504,7 @@ Streamlit also auto-reloads:
 python test_backend.py
 
 # Test specific endpoint
-curl http://localhost:8000/health
-```
-
-### 3. Viewing Logs
+curl http://localhost:8002/health
 
 ```bash
 # Tail log file
@@ -676,15 +689,15 @@ pip install pydantic-settings
 export PYTHONPATH="${PYTHONPATH}:$(pwd)"
 ```
 
-### Issue: Port 8000 already in use
+### Issue: port 8002 already in use
 
 **Solution:**
 ```bash
-# Kill process using port 8000
-lsof -ti:8000 | xargs kill -9  # macOS/Linux
+# Kill process using port 8002
+lsof -ti:8002 | xargs kill -9  # macOS/Linux
 
 # Windows
-netstat -ano | findstr :8000
+netstat -ano | findstr :8002
 taskkill /PID <PID> /F
 
 # Use different port
@@ -706,7 +719,7 @@ ls -la .env
 ### Issue: Streamlit can't connect to backend
 
 **Solution:**
-1. Verify backend is running: `curl http://localhost:8000/health`
+1. Verify backend is running: `curl http://localhost:8002/health`
 2. Check `CORS_ORIGINS` in `.env` includes `http://localhost:8501`
 3. Reload frontend page
 
