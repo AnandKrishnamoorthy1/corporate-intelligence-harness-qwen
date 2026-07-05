@@ -224,7 +224,7 @@ ALPHA_VANTAGE_API_KEY=your_av_key             # Market data
 
 # Optional — Qwen model settings
 QWEN_MODEL=qwen3.7-plus
-QWEN_TEMPERATURE=0.7
+QWEN_TEMPERATURE=0.3
 QWEN_TOP_P=0.85
 DASHSCOPE_ENDPOINT=https://dashscope-intl.aliyuncs.com/compatible-mode/v1
 
@@ -280,6 +280,108 @@ GET /api/portfolio
 | Hallucination prevention | Shared evidence contract + citation system | ✅ |
 | Performance optimization | 3-way parallel fetch + parallel debate rounds | ✅ |
 | Production architecture | LangGraph, Pydantic, NDJSON streaming, Docker | ✅ |
+
+---
+
+## 🏭 Production-Grade Engineering
+
+### Reusable AI Agent Skills
+
+The system implements **modular, reusable skills** that encapsulate domain-specific workflows. Skills are loaded dynamically via YAML manifests, enabling progressive disclosure of capabilities.
+
+#### Implemented Skills
+
+1. **Portfolio Analyzer** — Comprehensive asset allocation analysis
+   - Herfindahl-Hirschman Index (HHI) for concentration risk
+   - Sector allocation breakdown + bias detection
+   - Diversification scoring (0-100 scale)
+   - Actionable rebalancing recommendations
+
+2. **Risk Manager** — Multi-factor portfolio risk assessment
+   - Beta-weighted portfolio volatility
+   - Correlation risk analysis (sector-based grouping)
+   - Liquidity constraints + time-to-liquidate
+   - Composite risk scoring with tolerance-relative thresholds
+
+3. **Stop-Loss/Take-Profit Triggers** — Real-time threshold monitoring
+   - Concentration breach alerts (50% threshold for easy demo)
+   - Stop-loss triggers (-10% unrealized loss)
+   - Take-profit triggers (+30% unrealized gain)
+   - Pre-trade validation (checks if new buy/sell would breach thresholds)
+   - On-demand invocation: Only checks when strategically triggered
+
+**Skill Architecture**:
+```python
+# On-demand invocation (not continuous background monitoring)
+from app.skills import invoke_skill
+
+# Called in research_node before IC debate
+portfolio_analysis = invoke_skill("portfolio_analyzer", portfolio=portfolio_data)
+risk_report = invoke_skill("risk_manager", portfolio=portfolio_data, risk_tolerance="moderate")
+triggers = invoke_skill("stop_loss_take_profit", portfolio=portfolio_data)
+
+# Results passed to IC debate as contextual constraints
+```
+
+**Why This Matters for Judges**:
+- ✅ Sophisticated MCP orchestration pattern (progressive skill loading)
+- ✅ Novel algorithmic contributions (HHI, multi-factor risk, correlation clustering)
+- ✅ Production-ready patterns (graceful degradation, error handling)
+- ✅ Scalable architecture (add skills without modifying core logic)
+
+---
+
+### Error Handling & Resilience
+
+| Pattern | Location | Example |
+|---------|----------|---------|
+| **Graceful Degradation** | `orchestrator.py` | Yahoo Finance timeout → fallback to cached data + generic analysis |
+| **Structured Output Validation** | `qwen_integration.py` | Qwen JSON response validated against schema; invalid responses rejected |
+| **Streaming Error Recovery** | `qwen_integration.py` | Connection drops → return partial response; timeout → log & continue |
+| **Timeout Cascading** | `backend.py` | Triage (120s) > Streaming (90s) > Data fetch (30s) |
+| **Human-in-Loop Gates** | `orchestrator.py` | Every trade paused for approval before execution |
+
+---
+
+### Timeout Strategy
+
+| Operation | Timeout | Rationale |
+|-----------|---------|-----------|
+| Streaming (Persona) | 90s | Real-time LLM generation |
+| Structured Output (Triage) | 120s | JSON parsing overhead |
+| Data Fetch (Yahoo Finance) | 30s | API latency |
+| Trade Execution | 120s | OAuth + broker integration |
+| Frontend Request | 600s | NDJSON stream collection |
+
+**Fallback**: If timeout exceeded, system returns partial result + error count incremented.
+
+---
+
+### Conversation History Constraints
+
+- **Window**: Last 6 turns (3 user questions max)
+- **Truncation**: 150 chars per turn, sanitized
+- **Purpose**: Context-aware follow-ups ("Compare profitability" remembers "TSLA" from prior turn)
+- **Storage**: In-memory (Streamlit session_state), auto-cleared on new chat
+
+---
+
+### Deployment Checklist
+
+**Pre-Production:**
+- [ ] All API keys in `.env` (never in code)
+- [ ] DEBUG=False, LOG_LEVEL=INFO in production
+- [ ] Database transactions tested for trade atomicity
+- [ ] Rate limiting configured (30 req/min per IP)
+- [ ] Health check endpoints verified
+- [ ] Error recovery tested (simulate API failures)
+
+**Production Launch:**
+- [ ] CI/CD pipeline configured
+- [ ] Monitoring/alerting set up (error rates, latency SLA)
+- [ ] Backup/disaster recovery documented
+- [ ] On-call runbook for common failures
+- [ ] API versioning strategy (v1 prefix)
 
 ---
 

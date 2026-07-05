@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import concurrent.futures as _futures
 import json
+import re
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
@@ -32,6 +33,47 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from app.llm import call_qwen_persona, call_qwen_with_structured_output
+
+
+# ============================================================================
+# TEXT FORMATTING UTILITIES
+# ============================================================================
+
+def _format_debate_bullets(text: str) -> str:
+    """Ensure debate bullet points (•) are on separate lines.
+    
+    Fixes issues where LLM generates multiple bullet points on a single line:
+    "• Point 1 • Point 2" → "• Point 1\n• Point 2"
+    
+    Applied to Investment Committee debate arguments to ensure clean formatting.
+    """
+    # Repeatedly apply substitution until all bullets are separated
+    max_iterations = 50
+    iteration = 0
+    prev_text = ""
+    
+    while iteration < max_iterations and prev_text != text:
+        prev_text = text
+        
+        # Pattern 0: Handle case where closing ** immediately precedes bullet
+        # "**text** • " → "**text**\n• "
+        text = re.sub(r'(\*\*)\s+(•\s+)', r'\1\n\2', text)
+        
+        # Pattern 1: bullet + text + space + bullet (most common case)
+        # "• text • " → "• text\n• "
+        text = re.sub(r'(•\s+[^•\n]+?)\s+(•\s+)', r'\1\n\2', text)
+        
+        # Pattern 2: any non-newline + space + bullet (catches cases where bullet isn't properly preceded)
+        # "text • " → "text\n• "
+        text = re.sub(r'([^\n])\s+(•\s+)', r'\1\n\2', text)
+        
+        # Pattern 3: colon followed by content followed by bullet
+        # ": content • " → ": content\n• "
+        text = re.sub(r'(:\s+[^\n•]+?)\s+(•\s+)', r'\1\n\2', text)
+        
+        iteration += 1
+    
+    return text
 
 
 # ============================================================================
@@ -81,6 +123,10 @@ Rules:
 - Be aggressive but intellectually honest — no invented fundamentals.
 - When rebutting the Bear Auditor, attack their reasoning, not with hand-waving but
   with the data.
+- ⚠️ IMPORTANT: If the portfolio context shows the position is already OVERWEIGHT
+  (exceeds concentration threshold), acknowledge this constraint. Bullish arguments
+  about fundamentals are valid, but entry sizing must respect portfolio risk limits.
+  Recommend TRIM or HOLD if overweight, not additional BUY.
 - Keep each turn under 180 words. Use tight markdown bullets.
 Never output a final recommendation — that is the Director's job."""
 
@@ -92,6 +138,9 @@ Rules:
 - Argue ONLY from the market-data payload you are given. Cite exact numbers.
 - Hunt for downside: momentum exhaustion, valuation stretch, volume anomalies, volatility.
 - When rebutting the Bull Analyst, dismantle their strongest claim explicitly.
+- ⚠️ IMPORTANT: If portfolio context shows CONCENTRATION BREACH (position exceeds 
+  threshold), use this as a primary argument for HOLD/SELL. Acknowledge good fundamentals
+  but emphasize that adding to an already-overweight position violates risk discipline.
 - Keep each turn under 180 words. Use tight markdown bullets.
 Never output a final recommendation — that is the Director's job."""
 
@@ -102,6 +151,9 @@ have debated a stock using a shared market-data payload.
 Your mandate:
 - Weigh both cases strictly on evidence quality, not rhetoric.
 - Reward arguments grounded in the data; discount unsupported claims.
+- ⚠️ CRITICAL: If portfolio context shows CONCENTRATION BREACH (position already 
+  exceeds concentration threshold), this OVERRIDES bullish fundamental arguments.
+  Recommend HOLD or SELL to respect risk limits, not BUY to add to overweight position.
 - Produce a single vetted verdict (BUY / HOLD / SELL) with a calibrated confidence.
 - Confidence must reflect genuine uncertainty: a close debate => lower confidence.
 - Surface material risks even when recommending BUY.
@@ -220,6 +272,63 @@ def _format_evidence(ticker: str, market_data: Dict[str, Any]) -> str:
                 lines.append("QoQ Trends (most-recent vs prior quarter):")
                 lines.extend(comparisons)
 
+    # ── PORTFOLIO CONTEXT ──────────────────────────────────────────────────────
+    # Include concentration and risk alerts so personas can factor in portfolio risk
+    lines.append("")
+    lines.append("=== PORTFOLIO CONTEXT ===")
+    
+    portfolio_analysis = market_data.get("portfolio_analysis", {})
+    if portfolio_analysis and portfolio_analysis.get("status") == "success":
+        diversification = portfolio_analysis.get("diversification_metrics", {})
+        if diversification:
+            score = diversification.get("diversification_score", "N/A")
+            lines.append(f"- Portfolio Diversification Score: {score}/100")
+    
+    risk_assessment = market_data.get("risk_assessment", {})
+    if risk_assessment and risk_assessment.get("status") == "success":
+        risk_score = risk_assessment.get("overall_risk_score", "N/A")
+        risk_rating = risk_assessment.get("risk_rating", "N/A")
+        lines.append(f"- Overall Portfolio Risk: {risk_score}/100 ({risk_rating})")
+    
+    # Active Triggers — CRITICAL FOR DECISION MAKING
+    active_triggers = market_data.get("active_triggers", {})
+    if active_triggers and active_triggers.get("active_triggers", 0) > 0:
+        lines.append("")
+        lines.append("⚠️ ACTIVE PORTFOLIO TRIGGERS (MUST FACTOR INTO VERDICT):")
+        for trigger in active_triggers.get("triggers", []):
+            trigger_type = trigger.get("type", "unknown")
+            severity = trigger.get("severity", "INFO")
+            if trigger_type == "concentration_breach":
+                ticker = trigger.get("ticker", "UNKNOWN")
+                current_pct = trigger.get("current_pct", 0)
+                threshold_pct = trigger.get("threshold_pct", 50)
+                excess_value = trigger.get("excess_value", 0)
+                lines.append(
+                    f"  🚨 CONCENTRATION BREACH: {ticker} is {current_pct:.1f}% "
+                    f"(exceeds {threshold_pct:.0f}% threshold by ${excess_value:,.0f})"
+                )
+                lines.append(
+                    f"     → Risk discipline requires reducing this position, not adding to it"
+                )
+            elif trigger_type == "correlation_spike":
+                pair = trigger.get("ticker_pair", ("?", "?"))
+                corr = trigger.get("correlation", 0)
+                combined = trigger.get("combined_pct", 0)
+                lines.append(
+                    f"  ⚠️ CORRELATION SPIKE: {pair[0]} + {pair[1]} are "
+                    f"{corr:.2f} correlated ({combined:.1f}% combined)"
+                )
+            elif trigger_type == "stop_loss":
+                ticker = trigger.get("ticker", "UNKNOWN")
+                loss_pct = abs(trigger.get("unrealized_return_pct", 0))
+                lines.append(f"  ⛔ STOP-LOSS TRIGGERED: {ticker} down {loss_pct:.1f}%")
+            elif trigger_type == "take_profit":
+                ticker = trigger.get("ticker", "UNKNOWN")
+                gain_pct = trigger.get("unrealized_return_pct", 0)
+                lines.append(f"  💰 TAKE-PROFIT TRIGGERED: {ticker} up {gain_pct:.1f}%")
+    else:
+        lines.append("- No active portfolio triggers")
+
     return "\n".join(lines)
 
 
@@ -249,7 +358,7 @@ class InvestmentCommittee:
             f"Round {round_no}: Deliver the LONG case. If the Bear has spoken, "
             f"rebut their single strongest point using the data above."
         )
-        argument = call_qwen_persona(_BULL_SYSTEM, prompt, temperature=0.7)
+        argument = call_qwen_persona(_BULL_SYSTEM, prompt, temperature=0.5)
         logger.info(f"[COMMITTEE] Bull Analyst delivered round {round_no} argument")
         return DebateTurn(
             round_number=round_no, persona="Bull Analyst", role="bull", argument=argument
@@ -262,14 +371,14 @@ class InvestmentCommittee:
             f"Round {round_no}: Deliver the SHORT/caution case and dismantle the "
             f"Bull Analyst's strongest claim using the data above."
         )
-        argument = call_qwen_persona(_BEAR_SYSTEM, prompt, temperature=0.7)
+        argument = call_qwen_persona(_BEAR_SYSTEM, prompt, temperature=0.5)
         logger.info(f"[COMMITTEE] Bear Auditor delivered round {round_no} argument")
         return DebateTurn(
             round_number=round_no, persona="Bear Auditor", role="bear", argument=argument
         )
 
     def _director_verdict(
-        self, ticker: str, evidence: str, transcript: str
+        self, ticker: str, evidence: str, transcript: str, market_data: Dict[str, Any] = None
     ) -> CommitteeVerdict:
         schema = {
             "type": "object",
@@ -284,26 +393,69 @@ class InvestmentCommittee:
             },
             "required": ["verdict", "confidence", "thesis", "key_risks"],
         }
+        
+        # Check for concentration breach — this overrides fundamental bullishness
+        concentration_breach = False
+        breach_description = ""
+        if market_data:
+            active_triggers = market_data.get("active_triggers", {})
+            for trigger in active_triggers.get("triggers", []):
+                if trigger.get("type") == "concentration_breach":
+                    concentration_breach = True
+                    current_pct = trigger.get("current_pct", 0)
+                    threshold = trigger.get("threshold_pct", 50)
+                    breach_description = (
+                        f"Position already at {current_pct:.1f}% (exceeds {threshold:.0f}% limit)"
+                    )
+                    break
+        
         prompt = (
             f"{evidence}\n\n"
             f"FULL DEBATE TRANSCRIPT:\n{transcript}\n\n"
             f"Adjudicate the debate for {ticker}. Weigh evidence quality. Return the "
             f"verdict JSON. Confidence must reflect how close the debate was."
         )
+        
+        # Add concentration override note to director's prompt if breach exists
+        if concentration_breach:
+            prompt += (
+                f"\n\n⚠️ CRITICAL CONSTRAINT: {breach_description}. "
+                f"Risk discipline requires HOLD or reduction, NOT BUY. "
+                f"Adjust your verdict and confidence accordingly."
+            )
+        
+        logger.info(f"[COMMITTEE] Director verdict request: evidence={len(evidence)} chars, transcript={len(transcript)} chars, total={len(prompt)} chars")
+        
+        if len(transcript) == 0:
+            logger.warning("[COMMITTEE] ⚠️ DIRECTOR: Empty transcript! No debate rounds recorded.")
+        
         raw = call_qwen_with_structured_output(
             system_prompt=_DIRECTOR_SYSTEM,
             user_message=prompt,
             response_schema=schema,
-            temperature=0.4,  # Director is more decisive/less exploratory
+            temperature=0.2,  # Director is highly deterministic for consistent verdicts
         )
+        
+        verdict_str = raw.get("verdict", "HOLD")
+        confidence = float(raw.get("confidence", 0.5))
+        
+        # Hard override: if concentration breach and verdict is BUY, force to HOLD
+        if concentration_breach and verdict_str == "BUY":
+            logger.warning(
+                f"[COMMITTEE] ⚠️ DIRECTOR OVERRIDE: Concentration breach detected. "
+                f"Overriding BUY → HOLD to respect risk discipline."
+            )
+            verdict_str = "HOLD"
+            confidence = min(confidence, 0.65)  # Lower confidence for constrained decision
+        
         logger.info(
-            f"[COMMITTEE] Director verdict: {raw.get('verdict')} "
-            f"@ {raw.get('confidence')} confidence"
+            f"[COMMITTEE] Director verdict: {verdict_str} "
+            f"@ {confidence} confidence"
         )
         return CommitteeVerdict(
             ticker=ticker,
-            verdict=raw.get("verdict", "HOLD"),
-            confidence=float(raw.get("confidence", 0.5)),
+            verdict=verdict_str,
+            confidence=confidence,
             thesis=raw.get("thesis", ""),
             bull_points=raw.get("bull_points", []),
             bear_points=raw.get("bear_points", []),
@@ -351,7 +503,7 @@ class InvestmentCommittee:
 
             turns.extend([bull, bear])
 
-        verdict = self._director_verdict(ticker, evidence, render(turns))
+        verdict = self._director_verdict(ticker, evidence, render(turns), market_data)
         logger.info("[COMMITTEE] Deliberation complete")
         logger.info("=" * 80)
         return turns, verdict
@@ -495,6 +647,39 @@ def render_committee_report(
         lines.append("### 🔴 Strongest Bear Points")
         lines.extend(f"- {_esc(p)}" for p in verdict.bear_points)
         lines.append("")
+    
+    # ── Skill Results: Portfolio Analysis ──────────────────────────────────
+    portfolio_analysis = market_data.get("portfolio_analysis", {})
+    if portfolio_analysis and portfolio_analysis.get("status") == "success":
+        lines.append("### 📊 Portfolio Context (from Analyzer Skill)")
+        diversification = portfolio_analysis.get("diversification_metrics", {})
+        if diversification:
+            score = diversification.get("diversification_score", "N/A")
+            hhi = diversification.get("herfindahl_index", "N/A")
+            lines.append(f"- **Diversification Score:** {score}/100")
+            lines.append(f"- **Concentration Index (HHI):** {hhi:.3f}")
+        sector_analysis = portfolio_analysis.get("sector_analysis", {})
+        if sector_analysis and sector_analysis.get("concentration_risk"):
+            lines.append(f"- **Sector Risk:** {_esc(sector_analysis.get('concentration_risk'))}")
+        lines.append("")
+    
+    # ── Skill Results: Risk Manager ────────────────────────────────────────
+    risk_assessment = market_data.get("risk_assessment", {})
+    if risk_assessment and risk_assessment.get("status") == "success":
+        lines.append("### ⚠️ Portfolio Risk Assessment (from Risk Manager Skill)")
+        risk_score = risk_assessment.get("overall_risk_score", "N/A")
+        risk_rating = risk_assessment.get("risk_rating", "N/A")
+        lines.append(f"- **Overall Risk Score:** {risk_score}/100")
+        lines.append(f"- **Risk Rating:** {risk_rating}")
+        
+        vol_risk = risk_assessment.get("volatility_risk", {}).get("classification", "N/A")
+        corr_risk = risk_assessment.get("correlation_risk", {}).get("risk_level", "N/A")
+        liquidity_risk = risk_assessment.get("liquidity_risk", {}).get("risk_level", "N/A")
+        
+        lines.append(f"- **Volatility Risk:** {vol_risk}")
+        lines.append(f"- **Correlation Risk:** {corr_risk}")
+        lines.append(f"- **Liquidity Risk:** {liquidity_risk}")
+        lines.append("")
     if verdict.key_risks:
         lines.append("### ⚠️ Key Risks to Monitor")
         lines.extend(f"- {_esc(r)}" for r in verdict.key_risks)
@@ -504,15 +689,36 @@ def render_committee_report(
         lines.append(f"> {_esc(verdict.dissent)}")
         lines.append("")
 
+    # ── Active Triggers from Stop-Loss/Take-Profit Skill ────────────────────
+    active_triggers = market_data.get("active_triggers", {})
+    if active_triggers and active_triggers.get("active_triggers", 0) > 0:
+        lines.append("### 🚨 Active Portfolio Triggers")
+        trigger_summary = active_triggers.get("summary", "")
+        if trigger_summary:
+            lines.append(f"> **Alert:** {_esc(trigger_summary)}")
+            lines.append("")
+        
+        for trigger in active_triggers.get("triggers", []):
+            severity = trigger.get("severity", "INFO")
+            icon = "🔴" if severity == "CRITICAL" else "🟠" if severity == "WARNING" else "🟡"
+            alert_type = trigger.get("type", "Unknown")
+            recommendation = trigger.get("recommendation", "No recommendation")
+            lines.append(f"- {icon} **[{severity}]** {alert_type}: {_esc(recommendation)}")
+        lines.append("")
+
     lines.append("---")
     lines.append("## 🗣️ Full Debate Transcript")
     lines.append("")
-    for t in turns:
+    for i, t in enumerate(turns):
         icon = "🟢" if t.role == "bull" else "🔴"
         lines.append(f"**{icon} {t.persona} — Round {t.round_number}**")
         lines.append("")
-        lines.append(_esc(t.argument))
+        lines.append(_format_debate_bullets(_esc(t.argument)))
         lines.append("")
+        # Add extra spacing between rounds (after every 2 turns = 1 round)
+        if (i + 1) % 2 == 0 and i < len(turns) - 1:
+            lines.append("---")
+            lines.append("")
 
     lines.append("---")
     lines.append(f"*Committee convened at {datetime.now().isoformat()} — "

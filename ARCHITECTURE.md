@@ -84,8 +84,8 @@ InvestmentCommittee.deliberate(ticker, market_data)
 ```
 
 **Persona temperature stratification:**
-- Bull / Bear: `temperature=0.7` (exploratory arguments)
-- Director: `temperature=0.4` (decisive adjudication)
+- Bull / Bear: `temperature=0.5` (balanced exploration with determinism)
+- Director: `temperature=0.2` (highly deterministic verdicts)
 
 **Director uses `call_qwen_with_structured_output`** with a strict JSON schema (`CommitteeVerdict`) — guarantees machine-readable verdict, confidence, bull/bear points, risks, dissent.
 
