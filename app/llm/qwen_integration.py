@@ -64,6 +64,7 @@ def call_qwen_with_structured_output(
     response_schema: Dict[str, Any],
     temperature: Optional[float] = None,
     top_p: Optional[float] = None,
+    model: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Call Qwen with a structured output request.
@@ -74,6 +75,7 @@ def call_qwen_with_structured_output(
         response_schema: Expected JSON schema for response
         temperature: Sampling temperature (0.0-2.0), defaults to settings
         top_p: Nucleus sampling parameter, defaults to settings
+        model: Model to use, defaults to settings.qwen_model
         
     Returns:
         Parsed JSON response matching the schema
@@ -84,6 +86,7 @@ def call_qwen_with_structured_output(
     """
     temperature = temperature or settings.qwen_temperature
     top_p = top_p or settings.qwen_top_p
+    model = model or settings.qwen_model
     
     # Prepare the prompt with schema instructions
     schema_instruction = f"""
@@ -98,12 +101,12 @@ Do not include any text outside the JSON response.
     try:
         client = get_qwen_client()
         
-        logger.info(f"Calling Qwen ({settings.qwen_model}) with structured output request")
+        logger.info(f"Calling Qwen ({model}) with structured output request")
         logger.debug(f"User message: {user_message[:200]}...")
         logger.debug(f"Temperature: {temperature}, Top-p: {top_p}")
         
         response = client.chat.completions.create(
-            model=settings.qwen_model,
+            model=model,
             messages=[
                 {
                     "role": "system",
@@ -116,6 +119,7 @@ Do not include any text outside the JSON response.
             ],
             temperature=temperature,
             top_p=top_p,
+            timeout=120.0,  # 120s timeout for complex requests
         )
         
         logger.debug(f"Qwen response received: {response.choices[0].message.content[:300]}...")
@@ -170,18 +174,19 @@ Do not include any text outside the JSON response.
         raise RuntimeError(f"Qwen API error: {str(e)}")
 
 
-def call_qwen_for_triage(user_input: str) -> Dict[str, Any]:
+def call_qwen_for_triage(user_input: str, conversation_history: list = None) -> Dict[str, Any]:
     """
     Use Qwen to perform triage/routing of user query.
-    
+
     Args:
         user_input: User query to route
-        
+        conversation_history: Prior chat turns for disambiguation
+
     Returns:
         Dict with keys: ticker, routing_path, confidence, reasoning
     """
     from app.prompts.system_prompts import TRIAGE_PROMPT, SYSTEM_MESSAGE_RESEARCH
-    
+
     schema = {
         "type": "object",
         "properties": {
@@ -214,15 +219,29 @@ def call_qwen_for_triage(user_input: str) -> Dict[str, Any]:
         },
         "required": ["ticker", "routing_path", "confidence", "reasoning"]
     }
+
+    # Prepend recent conversation context so triage can resolve follow-ups
+    # (e.g. "What about the bear case?" → know it's about the last ticker)
+    history = conversation_history or []
+    # Extract last 3 user questions (not responses) for context
+    recent = []
+    for turn in history[-6:]:  # Check last 6 turns to get up to 3 user questions
+        if turn.get("role") == "user":
+            content = turn.get("content", "")[:150]  # Increased to 150 chars for better context
+            content = content.replace('"', "'").replace("\\", "")  # Clean special chars
+            recent.append(content)
     
-    formatted_prompt = TRIAGE_PROMPT.format(user_input=user_input)
-    
+    conversation_context = " | ".join(recent) if recent else "(no prior context)"
+
+    formatted_prompt = TRIAGE_PROMPT.format(user_input=user_input, conversation_context=conversation_context)
+
     response = call_qwen_with_structured_output(
         system_prompt=SYSTEM_MESSAGE_RESEARCH,
         user_message=formatted_prompt,
         response_schema=schema,
+        model=settings.qwen_routing_model,  # Use configured routing model for fast intent classification
     )
-    
+
     return response
 
 
@@ -277,6 +296,7 @@ def call_qwen_for_research(
             ],
             temperature=settings.qwen_temperature,
             top_p=settings.qwen_top_p,
+            timeout=30.0,
         )
         
         report = response.choices[0].message.content.strip()
@@ -364,6 +384,20 @@ def call_qwen_persona(
 
     try:
         client = get_qwen_client()
+        logger.debug(f"Persona call: {len(user_message)} chars of context")
+        
+        # Log message size for diagnostics
+        message_size = len(system_prompt) + len(user_message)
+        logger.info(f"[PERSONA] System prompt: {len(system_prompt)} chars | User message: {len(user_message)} chars | Total: {message_size} chars")
+        
+        if message_size > 100_000:
+            logger.warning(f"[PERSONA] ⚠️ LARGE CONTEXT: {message_size} chars — may cause timeout or high token usage")
+        
+        # Use streaming to show real-time progress and collect chunks
+        logger.info("[PERSONA] Streaming response...")
+        text_chunks = []
+        chunk_count = 0
+        
         response = client.chat.completions.create(
             model=settings.qwen_model,
             messages=[
@@ -372,8 +406,31 @@ def call_qwen_persona(
             ],
             temperature=temperature,
             top_p=top_p,
+            timeout=90.0,  # Increased for complex debate rounds with streaming
+            stream=True,  # Enable streaming
         )
-        text = response.choices[0].message.content.strip()
+        
+        for chunk in response:
+            if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+                delta = chunk.choices[0].delta.content
+                text_chunks.append(delta)
+                chunk_count += 1
+                
+                # DIAGNOSTIC: Log suspicious chunks (short, no spaces, special chars)
+                if len(delta) <= 5 and delta.strip() and not delta.startswith(" "):
+                    logger.debug(f"[PERSONA] Chunk #{chunk_count}: [{repr(delta)}] (len={len(delta)})")
+                
+                # Log every 10 chunks to show progress without log spam
+                if chunk_count % 10 == 0:
+                    logger.debug(f"[PERSONA] Streamed {chunk_count} chunks so far...")
+        
+        text = "".join(text_chunks).strip()
+        logger.info(f"[PERSONA] Stream complete ({chunk_count} chunks, {len(text)} chars)")
+        
+        # DIAGNOSTIC: Check for concatenation issues in the result
+        if "the " in text and re.search(r'[a-z]{10,}[A-Z]', text):
+            logger.warning(f"[PERSONA] ⚠️  Detected potential word concatenation in output")
+        
         # Normalize Unicode asterisks that Qwen occasionally emits
         text = text.replace("∗∗", "**").replace("∗", "*")
         text = re.sub(r'\n\n\n+', '\n\n', text)
@@ -383,13 +440,14 @@ def call_qwen_persona(
         raise RuntimeError(f"Qwen persona error: {str(e)}")
 
 
-def call_qwen_for_general_qa(user_input: str) -> str:
+def call_qwen_for_general_qa(user_input: str, conversation_history: list = None) -> str:
     """
     Use Qwen to answer general financial questions.
-    
+
     Args:
         user_input: User question
-        
+        conversation_history: Prior turns [{role, content}, ...] for follow-up context
+
     Returns:
         Answer in markdown format
     """
@@ -397,46 +455,51 @@ def call_qwen_for_general_qa(user_input: str) -> str:
         GENERAL_QA_PROMPT,
         SYSTEM_MESSAGE_QA
     )
-    
+
     formatted_prompt = GENERAL_QA_PROMPT.format(user_input=user_input)
-    
+
     try:
         client = get_qwen_client()
         logger.info("Calling Qwen for general Q&A")
-        
+
+        # Build messages: system → minimal history context → current user query
+        history = conversation_history or []
+        # Keep ONLY last 1 turn (user question) for context, heavily truncated
+        recent_history = history[-1:] if len(history) > 0 else []
+
+        messages = [{"role": "system", "content": SYSTEM_MESSAGE_QA}]
+        for turn in recent_history:
+            role = turn.get("role", "user")
+            content = turn.get("content", "")[:200]  # Truncate severely
+            if role in ("user", "assistant") and content:
+                messages.append({"role": role, "content": content})
+        messages.append({"role": "user", "content": formatted_prompt})
+
         response = client.chat.completions.create(
             model=settings.qwen_model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": SYSTEM_MESSAGE_QA,
-                },
-                {
-                    "role": "user",
-                    "content": formatted_prompt,
-                }
-            ],
+            messages=messages,
             temperature=settings.qwen_temperature,
             top_p=settings.qwen_top_p,
+            timeout=30.0,
         )
-        
+
         answer = response.choices[0].message.content.strip()
-        
+
         # Sanitize response: fix encoding issues and duplicates (same as research)
         # Step 1: Replace Unicode asterisks with ASCII
         answer = answer.replace("∗∗", "**")  # Unicode double asterisk to markdown bold
         answer = answer.replace("∗", "*")     # Unicode single asterisk to ASCII
-        
+
         # Step 2: Fix corrupted duplicate patterns
         answer = re.sub(r'(\w+)\*\*\1\*\*', r'**\1**', answer, flags=re.IGNORECASE)
-        
+
         # Step 3: Remove excessive blank lines
         answer = re.sub(r'\n\n\n+', '\n\n', answer)
-        
+
         logger.info("General Q&A response generated")
         logger.debug(f"Answer length (sanitized): {len(answer)} characters")
         return answer
-        
+
     except Exception as e:
         logger.error(f"Qwen QA call failed: {str(e)}")
         raise RuntimeError(f"Qwen QA error: {str(e)}")

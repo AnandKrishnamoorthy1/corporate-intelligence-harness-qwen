@@ -540,7 +540,7 @@ The application uses Pydantic `BaseSettings` to load configuration from `.env` f
 # ============================================================================
 QWEN_API_KEY=sk-xxxxxxxxxxxxxxxx
 QWEN_MODEL=qwen-max
-QWEN_TEMPERATURE=0.7
+QWEN_TEMPERATURE=0.3
 QWEN_TOP_P=0.85
 
 # ============================================================================

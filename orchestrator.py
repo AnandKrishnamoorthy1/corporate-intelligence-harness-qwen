@@ -13,7 +13,7 @@ financial research and autonomous trading workflow:
 7. Full audit logging via loguru for every execution step
 
 LLM: Alibaba Qwen (qwen3.7-plus) via DashScope international endpoint.
-External data: Alpha Vantage (real-time quote + fundamentals) + SEC EDGAR 10-Q (XBRL).
+External data: Yahoo Finance MCP (real-time quote + fundamentals) + SEC EDGAR 10-Q (XBRL).
 """
 
 import asyncio
@@ -33,6 +33,7 @@ from app.llm import call_qwen_for_triage, call_qwen_for_research, call_qwen_for_
 from app.agents import run_investment_committee
 from app.tools import financial_tools
 from app.trading import RobinhoodMCPClient, OrderSide, OrderType
+from app.skills import invoke_skill
 
 # ============================================================================
 # LOGGING CONFIGURATION
@@ -157,6 +158,7 @@ class ApprovalResponse(BaseModel):
 class GraphState(TypedDict, total=False):
     """Type definition for the state graph edges."""
     user_input: str
+    conversation_history: list  # [{"role": "user"|"assistant", "content": str}]
     current_target_ticker: str
     routing_decision: str
     trade_action: str  # "BUY" or "SELL" for direct trades
@@ -165,6 +167,10 @@ class GraphState(TypedDict, total=False):
     error_count: int
     pending_approval: Dict[str, Any]  # Approval request waiting for human
     approval_status: str  # "pending", "approved", "rejected"
+    portfolio_data: Dict[str, Any]  # User's portfolio holdings and cash
+    portfolio_analysis: Dict[str, Any]  # Results from Portfolio Analyzer skill
+    risk_assessment: Dict[str, Any]  # Results from Risk Manager skill
+    active_triggers: Dict[str, Any]  # Results from Stop-Loss/Take-Profit Triggers skill
 
 
 # ============================================================================
@@ -190,7 +196,6 @@ def triage_node(state: GraphState) -> GraphState:
     """
     logger.info("=" * 80)
     logger.info("[ENTERING TRIAGE NODE]")
-    logger.info(f"User Input: {state['user_input']}")
     logger.info("-" * 80)
     
     # ────────────────────────────────────────────────────────────────────
@@ -200,7 +205,10 @@ def triage_node(state: GraphState) -> GraphState:
     logger.info("Invoking Qwen LLM for structured routing decision...")
     
     try:
-        qwen_routing_decision = call_qwen_for_triage(state["user_input"])
+        qwen_routing_decision = call_qwen_for_triage(
+            state["user_input"],
+            conversation_history=state.get("conversation_history", []),
+        )
         logger.info(f"Qwen Response: {json.dumps(qwen_routing_decision, indent=2)}")
         
         # ────────────────────────────────────────────────────────────────────
@@ -254,13 +262,13 @@ def research_node(state: GraphState) -> GraphState:
     
     This node:
     1. Accepts routed state with ticker
-    2. Calls REAL Alpha Vantage API for live financial data
+    2. Calls real Yahoo Finance MCP for live financial data
     3. Uses Qwen to generate comprehensive AI analysis
     4. Adds human-in-loop approval checkpoint for BUY/SELL recommendations
     5. Returns state with analysis and approval request (if needed)
     
     This demonstrates:
-    - External tool invocation (Alpha Vantage API)
+    - External tool invocation (Yahoo Finance MCP)
     - Human-in-loop checkpoints at critical decision points
     - Production-ready error handling
     
@@ -286,10 +294,10 @@ def research_node(state: GraphState) -> GraphState:
         return state
     
     # ────────────────────────────────────────────────────────────────────
-    # EXTERNAL TOOL: ALPHA VANTAGE API - REAL DATA
+    # EXTERNAL TOOL: YAHOO FINANCE MCP - REAL DATA
     # ────────────────────────────────────────────────────────────────────
     
-    logger.info("[EXTERNAL TOOL] Calling Alpha Vantage API for real stock data + fundamentals...")
+    logger.info("[EXTERNAL TOOL] Calling Yahoo Finance MCP for real stock data + fundamentals...")
     
     # Quote and OVERVIEW fetched in parallel inside get_enriched_stock_data
     real_stock_data = financial_tools.get_enriched_stock_data(ticker)
@@ -313,16 +321,176 @@ def research_node(state: GraphState) -> GraphState:
         logger.info(f"  SEC Filings: unavailable ({sec.get('reason', 'unknown')})") 
     
     # ────────────────────────────────────────────────────────────────────
+    # BUILD PORTFOLIO DATA FOR SKILLS
+    # Fetch user's holdings to provide context for Portfolio Analyzer & Risk Manager
+    # ────────────────────────────────────────────────────────────────────
+    
+    portfolio_data_for_skills = {}
+    try:
+        from app.trading import get_broker_for_user, get_account_id_for_user
+        
+        broker = get_broker_for_user()
+        account_id = get_account_id_for_user()
+        account_info = asyncio.run(broker.get_account_info(account_id))
+        
+        if hasattr(broker, "ledger"):
+            raw = broker.ledger.get("accounts", {}).get(account_id, {})
+            raw_positions: dict = raw.get("positions", {})
+        else:
+            raw_positions = {}
+        
+        # Normalize positions
+        positions: dict = {}
+        for t, v in raw_positions.items():
+            if isinstance(v, dict):
+                positions[t] = {"quantity": float(v.get("quantity", 0)), "average_cost": float(v.get("avg_cost", 0))}
+            else:
+                positions[t] = {"quantity": float(v), "average_cost": 0.0}
+        
+        cash: float = float(getattr(account_info, "cash_balance", 0.0))
+        
+        if positions:
+            # Fetch live prices for trigger detection
+            import concurrent.futures as _cf
+            live_prices = {}
+            for t in positions.keys():
+                result = financial_tools.get_stock_data(t)
+                live_prices[t] = result if isinstance(result, dict) else {}
+            
+            # Build position list for skills
+            position_list = []
+            total_market_value = 0.0
+            
+            for ticker, pos in positions.items():
+                shares = float(pos.get("quantity", 0))
+                avg_cost = float(pos.get("average_cost", 0))
+                pdata = live_prices.get(ticker, {})
+                current_price = pdata.get("price", avg_cost)
+                market_value = shares * current_price
+                total_market_value += market_value
+                
+                position_list.append({
+                    "ticker": ticker,
+                    "shares": shares,
+                    "avg_cost": avg_cost,
+                    "current_price": current_price,
+                    "value": market_value,
+                    "sector": pdata.get("sector", "Unknown"),
+                })
+            
+            total_portfolio_value = total_market_value + cash
+            
+            # Build portfolio structure for skills
+            portfolio_data_for_skills = {
+                "positions": [
+                    {
+                        "ticker": p["ticker"],
+                        "value": p["value"],
+                        "pct_of_portfolio": (p["value"] / total_portfolio_value * 100) if total_portfolio_value > 0 else 0,
+                        "sector": p["sector"],
+                        "shares": p["shares"],
+                        "avg_cost": p["avg_cost"],
+                        "current_price": p["current_price"],
+                    }
+                    for p in position_list
+                ],
+                "history": position_list,
+                "total_value": total_portfolio_value,
+                "cash": cash,
+            }
+            
+            logger.info(f"Portfolio data built: {len(position_list)} position(s), ${total_portfolio_value:,.2f} total value")
+    
+    except Exception as e:
+        logger.warning(f"Could not fetch portfolio data for skills: {e}")
+        portfolio_data_for_skills = {}
+    
+    # ────────────────────────────────────────────────────────────────────
+    # INVOKE REUSABLE SKILLS: Portfolio Analysis & Risk Assessment
+    # These skills provide context for the Investment Committee debate
+    # ────────────────────────────────────────────────────────────────────
+    
+    logger.info("[SKILLS] Invoking Portfolio Analyzer skill...")
+    try:
+        portfolio_data = portfolio_data_for_skills
+        if portfolio_data:
+            portfolio_analysis = invoke_skill(
+                "portfolio_analyzer",
+                portfolio=portfolio_data
+            )
+            state["portfolio_analysis"] = portfolio_analysis
+            logger.info(f"[SKILLS] Portfolio analysis: Diversification score = {portfolio_analysis.get('diversification_metrics', {}).get('diversification_score', 'N/A')}")
+        else:
+            logger.debug("[SKILLS] No portfolio data available, skipping portfolio analysis")
+            state["portfolio_analysis"] = {}
+    except Exception as e:
+        logger.warning(f"[SKILLS] Portfolio Analyzer failed: {e}")
+        state["portfolio_analysis"] = {}
+    
+    logger.info("[SKILLS] Invoking Risk Manager skill...")
+    try:
+        if portfolio_data:
+            risk_assessment = invoke_skill(
+                "risk_manager",
+                portfolio=portfolio_data,
+                risk_tolerance="moderate"
+            )
+            state["risk_assessment"] = risk_assessment
+            logger.info(f"[SKILLS] Risk assessment: Score = {risk_assessment.get('overall_risk_score', 'N/A')}, Rating = {risk_assessment.get('risk_rating', 'N/A')}")
+        else:
+            logger.debug("[SKILLS] No portfolio data available, skipping risk assessment")
+            state["risk_assessment"] = {}
+    except Exception as e:
+        logger.warning(f"[SKILLS] Risk Manager failed: {e}")
+        state["risk_assessment"] = {}
+    
+    logger.info("[SKILLS] Checking stop-loss/take-profit triggers...")
+    try:
+        if portfolio_data:
+            triggers = invoke_skill(
+                "stop_loss_take_profit",
+                portfolio=portfolio_data
+            )
+            state["active_triggers"] = triggers
+            
+            num_triggers = triggers.get("active_triggers", 0)
+            if num_triggers > 0:
+                logger.warning(f"[SKILLS] {num_triggers} active trigger(s) detected")
+                logger.warning(f"[SKILLS] Summary: {triggers.get('summary', '')}")
+                for trigger in triggers.get("triggers", []):
+                    logger.warning(f"  • [{trigger.get('severity', 'INFO')}] {trigger.get('recommendation', '')}")
+            else:
+                logger.info("[SKILLS] No active triggers")
+        else:
+            logger.debug("[SKILLS] No portfolio data available, skipping trigger check")
+            state["active_triggers"] = {}
+    except Exception as e:
+        logger.warning(f"[SKILLS] Stop-Loss/Take-Profit check failed: {e}")
+        state["active_triggers"] = {}
+    
+    # ────────────────────────────────────────────────────────────────────
     # MULTI-AGENT ANALYSIS: TRI-AGENT ADVERSARIAL INVESTMENT COMMITTEE
     # Bull Analyst vs Bear Auditor, moderated by the Portfolio Director.
+    # Now with portfolio risk context + active triggers from skills!
     # ────────────────────────────────────────────────────────────────────
 
     try:
-        logger.info("Convening Tri-Agent Investment Committee on REAL data...")
+        logger.info("Convening Tri-Agent Investment Committee on REAL data (with skill-driven context)...")
+
+        # Save portfolio data to state for downstream use
+        state["portfolio_data"] = portfolio_data_for_skills
+        
+        # Add skill results to market_data so the committee has full context
+        market_data_with_skills = {
+            **real_stock_data,
+            "portfolio_analysis": state.get("portfolio_analysis", {}),
+            "risk_assessment": state.get("risk_assessment", {}),
+            "active_triggers": state.get("active_triggers", {}),
+        }
 
         committee_result = run_investment_committee(
             ticker=ticker,
-            market_data=real_stock_data,
+            market_data=market_data_with_skills,
             rounds=2,
         )
 
@@ -344,42 +512,11 @@ def research_node(state: GraphState) -> GraphState:
             f"({committee_confidence:.0%} confidence)"
         )
 
-        # ────────────────────────────────────────────────────────────────────
-        # HUMAN-IN-LOOP CHECKPOINT
-        # If the committee recommends BUY/SELL, require human approval
-        # ────────────────────────────────────────────────────────────────────
-
-        if recommendation in ["BUY", "SELL"]:
-            logger.warning("[CHECKPOINT] Committee verdict requires human approval!")
-            logger.warning(f"[CHECKPOINT] Action: {recommendation}")
-
-            request_id = f"{ticker}-{datetime.now().timestamp()}"
-
-            approval_request = ApprovalRequest(
-                request_id=request_id,
-                action=recommendation,
-                ticker=ticker,
-                reasoning=(
-                    f"Investment Committee ({recommendation}): "
-                    f"{verdict.get('thesis', '')}"
-                ),
-                confidence=committee_confidence,
-                timestamp=datetime.now().isoformat(),
-            )
-
-            state["pending_approval"] = approval_request.model_dump()
-            state["approval_status"] = "pending"
-            state["routing_decision"] = "awaiting_approval"
-
-            logger.warning(f"[CHECKPOINT] Approval request {request_id} created")
-            logger.warning("[CHECKPOINT] Workflow PAUSED - awaiting human decision")
-            logger.info("[RESEARCH NODE COMPLETE - AWAITING APPROVAL]")
-
-        else:
-            # HOLD or other recommendation - no approval needed
-            logger.info(f"[NO CHECKPOINT] Committee verdict: {recommendation} (no approval needed)")
-            state["routing_decision"] = "completed"
-            logger.info("[RESEARCH NODE COMPLETE]")
+        # Research path always delivers a report — no approval gate here.
+        # Approval gates are only triggered by the direct_trade path
+        # (explicit "Buy $X of TICKER" commands routed via trading_node).
+        state["routing_decision"] = "completed"
+        logger.info("[RESEARCH NODE COMPLETE]")
 
         logger.info("=" * 80)
         return state
@@ -393,7 +530,7 @@ def research_node(state: GraphState) -> GraphState:
         # Fallback report
         state["report_markdown"] = f"""# Financial Research Report: {ticker}
 
-## Live Market Data (Real Alpha Vantage)
+## Live Market Data (Real Yahoo Finance MCP)
 - **Current Price:** ${real_stock_data['price']}
 - **Change:** {real_stock_data['change_percent']:+.2f}%
 - **Volume:** {real_stock_data['volume']:,}
@@ -440,9 +577,11 @@ def general_q_node(state: GraphState) -> GraphState:
     
     This node:
     1. Accepts routed state
-    2. Uses Qwen to process general financial inquiries
-    3. Generates comprehensive answer
-    4. Returns enriched state with report
+    2. Detects if competitor comparison is being requested
+    3. If yes, fetches competitor data from Yahoo Finance
+    4. Uses Qwen to process general financial inquiries with context
+    5. Generates comprehensive answer
+    6. Returns enriched state with report
     
     Args:
         state: Current graph state
@@ -456,13 +595,85 @@ def general_q_node(state: GraphState) -> GraphState:
     logger.info("-" * 80)
     
     # ────────────────────────────────────────────────────────────────────
-    # QWEN GENERAL Q&A
+    # DETECT COMPETITOR ANALYSIS REQUEST
+    # ────────────────────────────────────────────────────────────────────
+    
+    user_input_lower = state['user_input'].lower()
+    is_competitor_question = any(
+        keyword in user_input_lower 
+        for keyword in ['competitor', 'compare', 'vs ', 'versus', 'profitability', 'margin', 'peer', 'sector']
+    )
+    
+    competitor_context = ""
+    if is_competitor_question and state.get('current_target_ticker'):
+        ticker = state['current_target_ticker']
+        logger.info(f"[GENERAL Q] Competitor analysis detected for {ticker}")
+        
+        try:
+            # Define sector-specific competitors
+            competitors_map = {
+                'TSLA': ['F', 'GM', 'TM', 'HMC', 'BMW', 'VWAGY'],  # Auto/EV
+                'NVDA': ['AMD', 'INTC', 'QCOM', 'AVGO', 'MCHP'],      # Semiconductors
+                'AMD': ['NVDA', 'INTC', 'QCOM', 'AVGO', 'MCHP'],      # Semiconductors
+                'GOOGL': ['META', 'MSFT', 'AMZN', 'NFLX', 'CRM'],     # Tech/Advertising
+                'AAPL': ['MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META'],    # Tech/Services
+                'MSFT': ['AAPL', 'GOOGL', 'AMZN', 'NVDA', 'IBM'],     # Tech/Cloud
+            }
+            
+            competitors = competitors_map.get(ticker, [])[:3]  # Get top 3 competitors
+            if competitors:
+                logger.info(f"[GENERAL Q] Fetching data for competitors: {competitors}")
+                
+                from app.tools.yahoo_finance_mcp_client import YahooFinanceMCPClient
+                yf_client = YahooFinanceMCPClient()
+                
+                comp_data = []
+                for comp_ticker in competitors:
+                    try:
+                        comp_info = yf_client.get_stock_info(comp_ticker)
+                        if comp_info:
+                            comp_data.append({
+                                'ticker': comp_ticker,
+                                'price': comp_info.get('price'),
+                                'profit_margin': comp_info.get('profit_margin'),
+                                'roe': comp_info.get('return_on_equity'),
+                                'pe': comp_info.get('pe_ratio'),
+                                'revenue_growth': comp_info.get('quarterly_revenue_growth_yoy'),
+                                'earnings_growth': comp_info.get('quarterly_earnings_growth_yoy'),
+                            })
+                    except Exception as e:
+                        logger.debug(f"[GENERAL Q] Failed to fetch {comp_ticker}: {e}")
+                        continue
+                
+                if comp_data:
+                    competitor_context = "\n\n## Competitor Data (for comparison):\n"
+                    for comp in comp_data:
+                        competitor_context += f"\n**{comp['ticker']}:**\n"
+                        competitor_context += f"- Price: ${comp['price']}\n"
+                        competitor_context += f"- Profit Margin: {comp['profit_margin']*100:.2f}%\n"
+                        competitor_context += f"- ROE: {comp['roe']*100:.2f}%\n"
+                        competitor_context += f"- P/E: {comp['pe']}\n"
+                        competitor_context += f"- Revenue Growth: {comp['revenue_growth']*100:.2f}%\n"
+                    logger.info(f"[GENERAL Q] Competitor context prepared ({len(competitor_context)} chars)")
+        
+        except Exception as e:
+            logger.warning(f"[GENERAL Q] Failed to fetch competitor data: {e}")
+            competitor_context = f"\n\n(Note: Unable to fetch competitor data - {str(e)})"
+    
+    # ────────────────────────────────────────────────────────────────────
+    # QWEN GENERAL Q&A WITH COMPETITOR CONTEXT
     # ────────────────────────────────────────────────────────────────────
     
     try:
         logger.info("Invoking Qwen for general Q&A...")
         
-        answer = call_qwen_for_general_qa(state["user_input"])
+        # Enhance user input with competitor context if applicable
+        enhanced_input = state['user_input'] + competitor_context
+
+        answer = call_qwen_for_general_qa(
+            enhanced_input,
+            conversation_history=state.get("conversation_history", []),
+        )
         state["report_markdown"] = answer
         
         logger.info(f"General Q&A response generated ({len(answer)} chars)")
@@ -579,6 +790,58 @@ def trading_node(state: GraphState) -> GraphState:
         return state
     
     try:
+        # ────────────────────────────────────────────────────────────────────
+        # PRE-TRADE RISK VALIDATION (SKILL 3: Stop-Loss/Take-Profit)
+        # ────────────────────────────────────────────────────────────────────
+        
+        logger.info("[SKILLS] Running pre-trade validation with stop-loss/take-profit checks...")
+        
+        portfolio_data = state.get("portfolio_data", {})
+        if portfolio_data:
+            # Estimate price for this trade (use live data if available)
+            trade_price = None
+            research_data = state.get("research_data", {})
+            if research_data and research_data.get("ticker") == ticker:
+                trade_price = research_data.get("price", None)
+            
+            # If we have a dollar amount but need quantity, calculate it
+            if amount_dollars and not quantity and trade_price:
+                quantity = amount_dollars / trade_price
+            
+            if quantity and trade_price:
+                proposed_trade = {
+                    "action": trade_action,
+                    "ticker": ticker,
+                    "shares": quantity,
+                    "price": trade_price
+                }
+                
+                pre_trade_check = invoke_skill(
+                    "stop_loss_take_profit",
+                    portfolio=portfolio_data,
+                    proposed_trade=proposed_trade
+                )
+                
+                if not pre_trade_check.get("approved", True):
+                    warnings = pre_trade_check.get("warnings", [])
+                    logger.warning(f"[SKILLS] Pre-trade validation: {len(warnings)} warning(s)")
+                    for warning in warnings:
+                        logger.warning(f"  ⚠️ {warning.get('warning', '')}")
+                    
+                    state["pre_trade_validation"] = {
+                        "approved": False,
+                        "warnings": warnings
+                    }
+                else:
+                    logger.info("[SKILLS] Pre-trade validation: PASSED - No concentration breaches")
+                    state["pre_trade_validation"] = {"approved": True}
+            else:
+                logger.debug("[SKILLS] Skipping pre-trade validation (insufficient price data)")
+                state["pre_trade_validation"] = {"approved": True}
+        else:
+            logger.debug("[SKILLS] No portfolio data available for pre-trade validation")
+            state["pre_trade_validation"] = {"approved": True}
+        
         # ────────────────────────────────────────────────────────────────────
         # CREATE HUMAN APPROVAL REQUEST
         # ────────────────────────────────────────────────────────────────────
@@ -757,7 +1020,7 @@ No trade was executed.
         filled_qty = f"{order.quantity:.4f}" if order.quantity else "?"
         total_val = f"\\${order.total_value:,.2f}" if order.total_value else trade_detail
         simulated_note = (
-            "Paper-trading simulation (real Alpha Vantage price, simulated balance)"
+            "Paper-trading simulation (real Yahoo Finance MCP price, simulated balance)"
             if getattr(order, "simulated", True)
             else "Live order via Robinhood MCP"
         )
@@ -852,7 +1115,7 @@ def reporting_node(state: GraphState) -> GraphState:
         if "error" in data:
             report = f"### Error Processing {ticker}\n\n{data['error']}"
         else:
-            # Build report from Alpha Vantage data
+            # Build report from Yahoo Finance MCP data
             report = f"""# Financial Research Report: {ticker}
 
 ## Current Market Data
@@ -863,7 +1126,7 @@ def reporting_node(state: GraphState) -> GraphState:
 - **Last Updated:** {data.get('timestamp', 'N/A')}
 
 ## Summary
-This report was generated using real market data from Alpha Vantage API combined with Qwen AI analysis.
+This report was generated using real market data from Yahoo Finance MCP combined with Qwen AI analysis.
 """
         
         state["report_markdown"] = report
@@ -885,7 +1148,7 @@ def portfolio_node(state: GraphState) -> GraphState:
 
     Steps:
     1. Fetch account info from the broker (MockSimulationEngine)
-    2. Pull live prices for every holding in parallel (Alpha Vantage)
+    2. Pull live prices for every holding in parallel (Yahoo Finance MCP)
     3. Compute market value, allocation %, unrealised P&L, risk score
     4. Call Qwen for a concise risk assessment + recommendations
     5. Build a structured markdown report
@@ -903,8 +1166,20 @@ def portfolio_node(state: GraphState) -> GraphState:
         account_id = get_account_id_for_user()
 
         account_info = asyncio.run(broker.get_account_info(account_id))
-        positions: dict = account_info.get("positions", {})
-        cash: float = float(account_info.get("cash", 0.0))
+        # AccountInfo doesn't carry positions — they live in the raw ledger.
+        if hasattr(broker, "ledger"):
+            raw = broker.ledger.get("accounts", {}).get(account_id, {})
+            raw_positions: dict = raw.get("positions", {})  # {ticker: {quantity, avg_cost}}
+        else:
+            raw_positions = {}
+        # Normalise — support both new dict format and legacy float entries.
+        positions: dict = {}
+        for t, v in raw_positions.items():
+            if isinstance(v, dict):
+                positions[t] = {"quantity": float(v.get("quantity", 0)), "average_cost": float(v.get("avg_cost", 0))}
+            else:
+                positions[t] = {"quantity": float(v), "average_cost": 0.0}
+        cash: float = float(getattr(account_info, "cash_balance", 0.0))
 
         logger.info(f"Account loaded: {len(positions)} position(s), ${cash:,.2f} cash")
 
@@ -920,15 +1195,13 @@ def portfolio_node(state: GraphState) -> GraphState:
             logger.info("=" * 80)
             return state
 
-        # ── Live price fetch (parallel) ───────────────────────────────────
+        # ── Live price fetch via Yahoo Finance MCP (no rate limits) ──────────
         tickers = list(positions.keys())
         logger.info(f"Fetching live prices for: {', '.join(tickers)}")
-        with _cf.ThreadPoolExecutor(max_workers=min(len(tickers), 5)) as pool:
-            price_map = {
-                t: pool.submit(financial_tools.get_stock_data, t)
-                for t in tickers
-            }
-            live = {t: f.result() for t, f in price_map.items()}
+        live = {}
+        for t in tickers:
+            result = financial_tools.get_stock_data(t)
+            live[t] = result if isinstance(result, dict) else {}
 
         # ── Compute per-position metrics ──────────────────────────────────
         holdings = []
@@ -936,7 +1209,10 @@ def portfolio_node(state: GraphState) -> GraphState:
         for ticker, pos in positions.items():
             shares = float(pos.get("quantity", 0))
             avg_cost = float(pos.get("average_cost", 0))
-            live_price = float(live[ticker].get("price", avg_cost))
+            pdata = live.get(ticker) or {}
+            is_mock = "Mock" in pdata.get("data_source", "")
+            raw_price = pdata.get("price")
+            live_price = avg_cost if (is_mock or not raw_price) else float(raw_price)
             market_val = shares * live_price
             cost_basis = shares * avg_cost
             unrealised_pnl = market_val - cost_basis
@@ -1185,7 +1461,7 @@ def build_graph() -> StateGraph:
 # EXECUTION HELPERS
 # ============================================================================
 
-def execute_graph(graph: StateGraph, user_input: str) -> GraphState:
+def execute_graph(graph: StateGraph, user_input: str, conversation_history: list = None) -> GraphState:
     """
     Executes the compiled graph with the given user input.
     
@@ -1204,6 +1480,7 @@ def execute_graph(graph: StateGraph, user_input: str) -> GraphState:
     # Initialize state
     initial_state: GraphState = {
         "user_input": user_input,
+        "conversation_history": conversation_history or [],
         "current_target_ticker": "",
         "routing_decision": "",
         "research_data": {},

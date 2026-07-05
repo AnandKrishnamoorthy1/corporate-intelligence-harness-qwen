@@ -205,6 +205,10 @@ class AnalysisRequest(BaseModel):
         min_length=1,
         max_length=2000
     )
+    conversation_history: list = Field(
+        default_factory=list,
+        description="Recent chat turns [{role, content}] for follow-up context",
+    )
 
 
 class AnalysisResponse(BaseModel):
@@ -467,8 +471,22 @@ async def get_portfolio():
     account_id = get_account_id_for_user()
     account_info = await broker.get_account_info(account_id)
 
-    positions: dict = account_info.get("positions", {})
-    cash: float = float(account_info.get("cash", 0.0))
+    # AccountInfo doesn't carry positions — they live in the raw ledger.
+    # Access ledger directly (MockSimulationEngine exposes broker.ledger).
+    if hasattr(broker, "ledger"):
+        raw = broker.ledger.get("accounts", {}).get(account_id, {})
+        raw_positions: dict = raw.get("positions", {})  # {ticker: {quantity, avg_cost}}
+    else:
+        raw_positions = {}
+
+    # Normalise — support both new dict format and legacy float entries.
+    positions: dict = {}
+    for t, v in raw_positions.items():
+        if isinstance(v, dict):
+            positions[t] = {"quantity": float(v.get("quantity", 0)), "average_cost": float(v.get("avg_cost", 0))}
+        else:
+            positions[t] = {"quantity": float(v), "average_cost": 0.0}
+    cash: float = float(getattr(account_info, "cash_balance", 0.0))
 
     if not positions:
         return {
@@ -483,33 +501,33 @@ async def get_portfolio():
             "num_positions": 0,
         }
 
-    # Fetch live prices in parallel
+    # Fetch live prices via Yahoo Finance MCP — no rate limits, run in parallel.
     tickers = list(positions.keys())
-    loop = asyncio.get_event_loop()
-    with _cf.ThreadPoolExecutor(max_workers=min(len(tickers), 5)) as pool:
-        futures = {t: loop.run_in_executor(pool, financial_tools.get_stock_data, t) for t in tickers}
-        price_data = {t: await f for t, f in futures.items()}
+    with _cf.ThreadPoolExecutor(max_workers=len(tickers)) as pool:
+        price_futures = {t: pool.submit(financial_tools.get_stock_data, t) for t in tickers}
+        price_data = {t: (f.result() if isinstance(f.result(), dict) else {}) for t, f in price_futures.items()}
 
     holdings = []
     invested_value = 0.0
     for ticker, pos in positions.items():
         shares = float(pos.get("quantity", 0))
         avg_cost = float(pos.get("average_cost", 0))
-        live_price = float(price_data[ticker].get("price", avg_cost))
+        pdata = price_data.get(ticker) or {}
+        live_price = float(pdata.get("price") or avg_cost)
         market_val = shares * live_price
         cost_basis = shares * avg_cost
         unrealised_pnl = market_val - cost_basis
-        unrealised_pct = (unrealised_pnl / cost_basis * 100) if cost_basis else 0.0
+        unrealised_pct = round((unrealised_pnl / cost_basis * 100) if cost_basis else 0.0, 2)
         invested_value += market_val
         holdings.append({
             "ticker": ticker,
             "shares": round(shares, 6),
             "avg_cost": round(avg_cost, 4),
-            "live_price": round(live_price, 4),
+            "live_price": round(live_price, 2),
             "market_value": round(market_val, 2),
             "cost_basis": round(cost_basis, 2),
             "unrealised_pnl": round(unrealised_pnl, 2),
-            "unrealised_pct": round(unrealised_pct, 2),
+            "unrealised_pct": unrealised_pct,
             "allocation_pct": 0.0,  # filled below
         })
 
@@ -587,6 +605,7 @@ async def analyze(request: AnalysisRequest) -> AnalysisResponse:
             # Initialize state
             initial_state: GraphState = {
                 "user_input": request.user_input,
+                "conversation_history": request.conversation_history or [],
                 "current_target_ticker": "",
                 "routing_decision": "",
                 "research_data": {},
@@ -712,6 +731,7 @@ async def analyze_stream(request: AnalysisRequest):
             graph = build_graph()
             initial_state: GraphState = {
                 "user_input": request.user_input,
+                "conversation_history": request.conversation_history or [],
                 "current_target_ticker": "",
                 "routing_decision": "",
                 "research_data": {},

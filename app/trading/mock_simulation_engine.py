@@ -113,20 +113,12 @@ class MockSimulationEngine(BaseBroker):
         """
         self._ensure_account_exists(account_id)
         account = self.ledger["accounts"][account_id]
-        
-        # Calculate portfolio value (cash + positions value)
+
+        # Use stored portfolio_value to avoid burning AV quota here.
+        # The portfolio endpoint fetches live prices separately.
         positions = account.get("positions", {})
-        positions_value = 0
-        for ticker, shares in positions.items():
-            try:
-                data = self.financial_tools.get_stock_data(ticker)
-                price = data.get("price", 0)
-                positions_value += shares * price
-            except:
-                pass
-        
-        total_value = account["cash_balance"] + positions_value
-        
+        total_value = account.get("portfolio_value", account["cash_balance"])
+
         return AccountInfo(
             account_id=account_id,
             account_type="paper_trading",
@@ -206,18 +198,28 @@ class MockSimulationEngine(BaseBroker):
             
             # Step 5: Update simulated portfolio
             positions = account.get("positions", {})
-            
+
             if side == OrderSide.BUY:
-                # Add shares and deduct cash
-                positions[ticker] = positions.get(ticker, 0) + quantity
+                existing = positions.get(ticker, {"quantity": 0.0, "avg_cost": 0.0})
+                # Migrate legacy float entries (pre-DCA tracking)
+                if not isinstance(existing, dict):
+                    existing = {"quantity": float(existing), "avg_cost": execution_price}
+                old_qty = existing["quantity"]
+                old_cost = existing["avg_cost"]
+                new_qty = old_qty + quantity
+                # Weighted average cost
+                new_avg = ((old_qty * old_cost) + (quantity * execution_price)) / new_qty
+                positions[ticker] = {"quantity": new_qty, "avg_cost": round(new_avg, 4)}
                 account["cash_balance"] -= total_value
             else:  # SELL
-                # Remove shares and add cash
-                current_shares = positions.get(ticker, 0)
+                existing = positions.get(ticker, {"quantity": 0.0, "avg_cost": 0.0})
+                if not isinstance(existing, dict):
+                    existing = {"quantity": float(existing), "avg_cost": execution_price}
+                current_shares = existing["quantity"]
                 if current_shares < quantity:
                     error_msg = f"Cannot sell {quantity} shares of {ticker} (only have {current_shares})"
                     logger.warning(f"❌ {error_msg}")
-                    
+
                     return TradeOrder(
                         order_id=f"sim-{uuid.uuid4().hex[:8]}",
                         account_id=account_id,
@@ -228,10 +230,13 @@ class MockSimulationEngine(BaseBroker):
                         error_message=error_msg,
                         simulated=True,
                     )
-                
-                positions[ticker] -= quantity
-                if positions[ticker] <= 0:
+
+                new_qty = current_shares - quantity
+                if new_qty <= 0:
                     del positions[ticker]
+                else:
+                    # avg_cost stays the same on partial sell
+                    positions[ticker] = {"quantity": new_qty, "avg_cost": existing["avg_cost"]}
                 account["cash_balance"] += total_value
             
             account["positions"] = positions

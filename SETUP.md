@@ -90,8 +90,8 @@ QWEN_MODEL=qwen3.7-plus
 DASHSCOPE_ENDPOINT=https://dashscope-intl.aliyuncs.com/compatible-mode/v1
 
 # Model sampling parameters
-QWEN_TEMPERATURE=0.7
-QWEN_TOP_P=0.85
+QWEN_TEMPERATURE=0.3
+QWEN_TOP_P=0.65
 
 # ============================================================================
 # REQUIRED: Financial Data
@@ -198,7 +198,7 @@ QWEN_MODEL=qwen3.7-plus   # default for this project
 
 ### Temperature (Creativity)
 
-`QWEN_TEMPERATURE=0.7` (range: 0.0 - 2.0)
+`QWEN_TEMPERATURE=0.3` (range: 0.0 - 2.0, lower = more deterministic)
 
 - **0.0** = Deterministic, factual responses
 - **0.7** = Balanced (default)
@@ -208,7 +208,7 @@ For financial analysis, use lower values (0.3-0.7).
 
 ### Top P (Diversity)
 
-`QWEN_TOP_P=0.85` (range: 0.0 - 1.0)
+`QWEN_TOP_P=0.65` (range: 0.0 - 1.0, lower = more deterministic)
 
 - **0.85** = Default (balanced diversity)
 - **0.5** = More focused

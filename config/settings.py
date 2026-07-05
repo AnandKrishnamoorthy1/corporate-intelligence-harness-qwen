@@ -63,8 +63,9 @@ class Settings(BaseSettings):
     dashscope_api_key: Optional[str] = Field(default=None, env="DASHSCOPE_API_KEY")
     qwen_api_key: Optional[str] = Field(default=None, env="DASHSCOPE_API_KEY")  # Alias for backward compatibility
     qwen_model: str = Field(default="qwen3.7-plus", env="QWEN_MODEL")
-    qwen_temperature: float = Field(default=0.7, env="QWEN_TEMPERATURE")
-    qwen_top_p: float = Field(default=0.85, env="QWEN_TOP_P")
+    qwen_routing_model: str = Field(default="qwen3.6-flash", env="QWEN_ROUTING_MODEL")
+    qwen_temperature: float = Field(default=0.3, env="QWEN_TEMPERATURE")
+    qwen_top_p: float = Field(default=0.65, env="QWEN_TOP_P")
     dashscope_endpoint: Optional[str] = Field(
         default="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
         env="DASHSCOPE_ENDPOINT",
@@ -76,6 +77,10 @@ class Settings(BaseSettings):
     # ========================================================================
     
     alpha_vantage_api_key: Optional[str] = Field(default=None, env="ALPHA_VANTAGE_API_KEY")
+    # Optional second key for OVERVIEW endpoint — doubles daily quota and
+    # eliminates rate-limit collisions when both calls run in parallel.
+    # Falls back to alpha_vantage_api_key if not set.
+    alpha_vantage_api_key_2: Optional[str] = Field(default=None, env="ALPHA_VANTAGE_API_KEY_2")
     finnhub_api_key: Optional[str] = Field(default=None, env="FINNHUB_API_KEY")
     
     # ========================================================================
