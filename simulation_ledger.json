@@ -3,7 +3,7 @@
     "SIM-DEFAULT": {
       "id": "SIM-DEFAULT",
       "account_type": "paper_trading",
-      "cash_balance": 6390.0,
+      "cash_balance": 6190.0,
       "portfolio_value": 10000.0,
       "positions": {
         "AMD": {
@@ -15,7 +15,7 @@
           "avg_cost": 184.79
         },
         "TSLA": {
-          "quantity": 0.5083238022620409,
+          "quantity": 1.0166476045240818,
           "avg_cost": 393.45
         },
         "NVDA": {
@@ -186,6 +186,16 @@
       "execution_price": 194.83,
       "total_value": 2000.0,
       "timestamp": "2026-07-05T00:29:07.480785"
+    },
+    {
+      "order_id": "sim-b33ee9e9",
+      "account_id": "SIM-DEFAULT",
+      "ticker": "TSLA",
+      "side": "buy",
+      "quantity": 0.5083238022620409,
+      "execution_price": 393.45,
+      "total_value": 199.99999999999997,
+      "timestamp": "2026-07-05T14:26:49.177069"
     }
   ],
   "positions": {}

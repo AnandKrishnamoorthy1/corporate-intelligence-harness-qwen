@@ -10,6 +10,9 @@ config/.env
 secrets/
 *.pem
 *.key
+deployment/access.yaml
+.s/access.yaml
+s/access.yaml
 
 # ============================================================================
 # PYTHON

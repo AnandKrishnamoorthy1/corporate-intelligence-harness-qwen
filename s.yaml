@@ -1,0 +1,79 @@
+# Serverless Devs Configuration for Alibaba Cloud Function Compute
+# 
+# Usage: s deploy
+# Documentation: https://www.serverless-devs.com/
+
+edition: 3.0.0
+name: corporate-intelligence-engine
+access: alibaba  # Uses credentials from ~/.s/access.yaml
+
+vars:
+  region: us-east-1  # Virginia (US East)
+  runtime: custom.debian11
+  memory: 1024  # MB — adequate for Qwen LLM execution
+  timeout: 300  # seconds (5 minutes for multi-agent debate + SEC fetch)
+
+resources:
+  fastapi-backend:
+    component: fc3
+    props:
+      region: ${vars.region}
+      functionName: corporate-intelligence-fastapi
+      description: FastAPI backend orchestrating multi-agent investment analysis
+      runtime: ${vars.runtime}
+      codeUri: .
+      handler: backend.handler
+      memorySize: ${vars.memory}
+      timeout: ${vars.timeout}
+      instanceConcurrency: 10
+      cpuType: x86
+      
+      # Force explicit runtime startup via bash bootstrap
+      customRuntimeConfig:
+        command:
+          - bash
+        args:
+          - /code/bootstrap
+      
+      # Environment variables for production
+      # Non-sensitive configuration only (add secrets via cloud console after deployment)
+      environmentVariables:
+        # Non-sensitive configuration
+        QWEN_MODEL: qwen3.7-plus
+        QWEN_ROUTING_MODEL: qwen3.6-flash
+        QWEN_TEMPERATURE: "0.3"
+        QWEN_TOP_P: "0.65"
+        ENVIRONMENT: production
+        DEBUG: "false"
+        
+        # ⚠️ IMPORTANT: Do NOT add sensitive variables here
+        # Add these via Alibaba Cloud Console after deployment:
+        # 1. Go to Function Compute → corporate-intelligence-fastapi
+        # 2. Configurations → Environment Variables → Modify
+        # 3. Add:
+        #    - DASHSCOPE_API_KEY
+        #    - ALPHA_VANTAGE_API_KEY
+        #    - PROD_SERVERLESS_DB_URL
+        
+      # HTTP trigger for API endpoint
+      triggers:
+        - type: http
+          name: api-http-trigger
+          properties:
+            qualifier: LATEST
+            methods:
+              - POST
+              - GET
+              - OPTIONS
+            authType: anonymous  # Public API access
+            enableCORS: true
+            
+      # Logging configuration
+      logConfig:
+        logstore: corporate-intelligence-logs
+        project: corporate-intelligence-project
+
+# ✨ FRONTEND DEPLOYMENT: Use Streamlit Community Cloud (free) instead
+# See: https://share.streamlit.io
+# After backend is live, deploy frontend separately for beautiful public URL
+# Frontend will connect via BACKEND_API_URL environment variable set in Streamlit secrets

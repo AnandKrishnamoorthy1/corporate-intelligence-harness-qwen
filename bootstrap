@@ -1,0 +1,10 @@
+﻿#!/usr/bin/env bash
+cd /code
+
+# 1. Map your pristine Python 3.12 binary path
+export PATH=/var/fc/lang/python3.12/bin:$PATH
+
+# 2. Tell Python to map your isolated cloud layer dependencies
+export PYTHONPATH=/opt/python:$PYTHONPATH
+
+exec python3 -m uvicorn backend:app --host 0.0.0.0 --port 9000

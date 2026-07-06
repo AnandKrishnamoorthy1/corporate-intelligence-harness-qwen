@@ -337,6 +337,38 @@ app.add_middleware(
 )
 
 # ============================================================================
+# HEALTH CHECK ENDPOINT
+# ============================================================================
+
+@app.get("/")
+def home_health_check():
+    """Root health check endpoint for Alibaba Cloud Function Compute."""
+    return {
+        "status": "online",
+        "engine": "Corporate Intelligence Engine Backend",
+        "python_version": "3.12",
+        "version": "1.0.0"
+    }
+
+@app.get("/health")
+def health_check():
+    """Health check endpoint."""
+    return {
+        "status": "healthy",
+        "service": "corporate-intelligence-engine",
+        "timestamp": datetime.now().isoformat()
+    }
+
+@app.post("/invoke")
+async def alibaba_invoke_trigger():
+    return {
+        "status": "success",
+        "engine": "Corporate Intelligence Engine",
+        "message": "FastAPI backend is fully operational on custom.debian11!",
+        "execution_mode": "Multi-agent framework loaded smoothly"
+    }
+
+# ============================================================================
 # LOGGING SETUP - CAPTURE FOR API RESPONSES WITH LOGURU
 # ============================================================================
 
@@ -1063,3 +1095,30 @@ if __name__ == "__main__":
         log_level="info",
         timeout_keep_alive=120,  # Keep connections alive for 120s
     )
+
+
+# ============================================================================
+# ALIBABA CLOUD FUNCTION COMPUTE HANDLER
+# ============================================================================
+# WSGI entry point for serverless deployment to Alibaba Cloud Function Compute 3.0
+
+def handler(environ, start_response):
+    """
+    WSGI handler for Alibaba Cloud Function Compute.
+    
+    Converts the WSGI request to FastAPI/Starlette format and returns the response.
+    This allows the FastAPI app to run as a serverless function on Alibaba Cloud.
+    """
+    from starlette.middleware.wsgi import WSGIMiddleware
+    
+    wsgi_app = WSGIMiddleware(app)
+    return wsgi_app(environ, start_response)
+
+@app.post("/invoke")
+async def alibaba_invoke_trigger():
+    return {
+        "status": "success",
+        "engine": "Corporate Intelligence Engine",
+        "message": "FastAPI backend is fully operational on custom.debian11!",
+        "execution_mode": "Multi-agent framework loaded smoothly"
+    }
