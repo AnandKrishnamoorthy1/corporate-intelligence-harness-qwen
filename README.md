@@ -230,7 +230,7 @@ research_node
 │   │   └── sec_tools.py              # SEC EDGAR 10-Q via edgartools (XBRL)
 │   ├── trading/
 │   │   ├── broker_interface.py       # Abstract BaseBroker contract
-│   │   ├── mock_simulation_engine.py # Paper trading — $10k balance, real AV prices
+│   │   ├── mock_simulation_engine.py # Paper trading — $10k balance, real market prices
 │   │   ├── robinhood_client.py       # Robinhood MCP client (live trading)
 │   │   ├── broker_factory.py         # BROKER_TYPE env var selects implementation
 │   │   └── oauth_handler.py          # Robinhood OAuth flow
@@ -256,7 +256,6 @@ research_node
 ```bash
 # Required
 DASHSCOPE_API_KEY=your_dashscope_key          # Qwen LLM
-ALPHA_VANTAGE_API_KEY=your_av_key             # Market data
 
 # Optional — Qwen model settings
 QWEN_MODEL=qwen3.7-plus
@@ -299,7 +298,7 @@ POST /api/execute/{request_id}
 ### Portfolio
 ```bash
 GET /api/portfolio
-# Returns holdings with live AV prices, P&L, HHI concentration score
+# Returns holdings with live market prices, P&L, HHI concentration score
 ```
 
 ---

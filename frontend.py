@@ -189,63 +189,260 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Custom CSS for better styling
+# Modern CSS for enhanced UI/UX
 st.markdown("""
 <style>
+    /* Typography & General */
+    * {
+        font-family: 'Segoe UI', 'Helvetica Neue', sans-serif;
+    }
+    
+    h1, h2, h3 {
+        font-weight: 600;
+        letter-spacing: -0.5px;
+    }
+    
+    /* Main Container */
+    .main {
+        background: linear-gradient(135deg, #f5f7fa 0%, #f9fafb 100%);
+    }
+    
+    /* Header & Title */
     .main-title {
         text-align: center;
-        color: #1f77b4;
-        margin-bottom: 30px;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 40px 20px;
+        margin: -80px -80px 30px -80px;
+        border-radius: 0 0 20px 20px;
+        box-shadow: 0 10px 30px rgba(102, 126, 234, 0.2);
+        font-size: 2.5em;
+        font-weight: 700;
+    }
+    
+    /* Cards & Boxes */
+    .card {
+        background: white;
+        padding: 20px;
+        border-radius: 12px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+        border: 1px solid rgba(0, 0, 0, 0.05);
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        margin-bottom: 15px;
+    }
+    
+    .card:hover {
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+        transform: translateY(-2px);
     }
     
     .status-box {
-        background-color: #f0f2f6;
-        padding: 15px;
-        border-radius: 5px;
-        border-left: 4px solid #1f77b4;
+        background: linear-gradient(135deg, #667eea15 0%, #764ba215 100%);
+        padding: 20px;
+        border-radius: 12px;
+        border-left: 5px solid #667eea;
+        border: 1px solid rgba(102, 126, 234, 0.2);
     }
     
-    .log-entry {
-        font-family: monospace;
+    .status-box.success {
+        border-left-color: #10b981;
+        background: linear-gradient(135deg, #10b98115 0%, #06b6d415 100%);
+        border-color: rgba(16, 185, 129, 0.2);
+    }
+    
+    .status-box.error {
+        border-left-color: #ef4444;
+        background: linear-gradient(135deg, #ef444415 0%, #f8717715 100%);
+        border-color: rgba(239, 68, 68, 0.2);
+    }
+    
+    /* Badges */
+    .badge {
+        display: inline-block;
+        padding: 6px 12px;
+        border-radius: 20px;
         font-size: 0.85em;
-        line-height: 1.5;
-        color: #333;
+        font-weight: 600;
+        margin: 5px 5px 5px 0;
+        transition: all 0.3s ease;
     }
     
-    .success-badge {
-        color: #28a745;
-        font-weight: bold;
+    .badge-success {
+        background: linear-gradient(135deg, #10b981 0%, #06b6d4 100%);
+        color: white;
     }
     
-    .error-badge {
-        color: #dc3545;
-        font-weight: bold;
+    .badge-error {
+        background: linear-gradient(135deg, #ef4444 0%, #f87171 100%);
+        color: white;
+    }
+    
+    .badge-research {
+        background: linear-gradient(135deg, #3b82f6 0%, #60a5fa 100%);
+        color: white;
+    }
+    
+    .badge-general {
+        background: linear-gradient(135deg, #a855f7 0%, #d946ef 100%);
+        color: white;
     }
     
     .routing-badge {
         display: inline-block;
-        padding: 5px 10px;
-        border-radius: 3px;
-        font-weight: bold;
+        padding: 8px 16px;
+        border-radius: 20px;
+        font-weight: 600;
         margin: 5px 0;
     }
     
     .research-badge {
-        background-color: #e3f2fd;
-        color: #1565c0;
+        background-color: #dbeafe;
+        color: #1e40af;
     }
     
     .general-badge {
-        background-color: #f3e5f5;
-        color: #6a1b9a;
+        background-color: #f3e8ff;
+        color: #6b21a8;
     }
     
+    /* Portfolio Metrics */
     .metric-box {
-        background-color: #f8f9fa;
-        padding: 15px;
-        border-radius: 5px;
+        background: linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%);
+        padding: 20px;
+        border-radius: 12px;
+        border: 1px solid #e5e7eb;
         text-align: center;
         margin: 10px 0;
+        transition: all 0.3s ease;
+    }
+    
+    .metric-box:hover {
+        border-color: #667eea;
+        box-shadow: 0 4px 12px rgba(102, 126, 234, 0.1);
+    }
+    
+    .metric-value {
+        font-size: 1.8em;
+        font-weight: 700;
+        color: #1f2937;
+        margin: 10px 0 5px 0;
+    }
+    
+    .metric-label {
+        font-size: 0.9em;
+        color: #6b7280;
+        font-weight: 500;
+    }
+    
+    /* Logs & Code */
+    .log-entry {
+        font-family: 'Fira Code', 'Monaco', monospace;
+        font-size: 0.85em;
+        line-height: 1.6;
+        color: #374151;
+        background: #f9fafb;
+        padding: 2px 4px;
+        border-radius: 4px;
+    }
+    
+    .log-container {
+        background: #f3f4f6;
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        padding: 12px;
+        max-height: 400px;
+        overflow-y: auto;
+    }
+    
+    /* Success & Error Badges */
+    .success-badge {
+        color: #10b981;
+        font-weight: 600;
+    }
+    
+    .error-badge {
+        color: #ef4444;
+        font-weight: 600;
+    }
+    
+    /* Tables */
+    table {
+        border-collapse: collapse;
+        width: 100%;
+        font-size: 0.95em;
+    }
+    
+    th {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 12px;
+        text-align: left;
+        font-weight: 600;
+    }
+    
+    td {
+        padding: 12px;
+        border-bottom: 1px solid #e5e7eb;
+    }
+    
+    tr:hover {
+        background-color: #f9fafb;
+    }
+    
+    /* Buttons */
+    button {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border: none;
+        padding: 10px 20px;
+        border-radius: 8px;
+        cursor: pointer;
+        font-weight: 600;
+        transition: all 0.3s ease;
+    }
+    
+    button:hover {
+        box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        transform: translateY(-2px);
+    }
+    
+    /* Sidebar */
+    [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #f9fafb 0%, #f3f4f6 100%);
+    }
+    
+    /* Input Fields */
+    input, textarea, select {
+        border: 1px solid #e5e7eb !important;
+        border-radius: 8px !important;
+        padding: 10px !important;
+        font-size: 0.95em !important;
+        transition: all 0.3s ease !important;
+    }
+    
+    input:focus, textarea:focus, select:focus {
+        border-color: #667eea !important;
+        box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1) !important;
+    }
+    
+    /* Prevent stale element fading during long computations */
+    /* Keep chat messages and previous context fully visible while streams process */
+    [data-stale="true"] {
+        opacity: 1 !important;
+        filter: none !important;
+        backdrop-filter: none !important;
+    }
+    
+    /* Specifically ensure chat messages stay vivid */
+    [data-testid="stChatMessage"][data-stale="true"] {
+        opacity: 1 !important;
+        filter: none !important;
+    }
+    
+    /* Prevent blur on message containers */
+    [data-stale="true"] [data-testid="stChatMessage"] {
+        opacity: 1 !important;
+        filter: none !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -682,15 +879,20 @@ def get_routing_badge_label(routing_decision: str) -> str:
 # ============================================================================
 
 st.markdown(
-    "<h1 class='main-title'>📊 Corporate Intelligence & Earnings Analyst Engine</h1>",
+    "<h1 class='main-title'>📊 Corporate Intelligence & Earnings Analyst</h1>",
     unsafe_allow_html=True,
 )
 
 st.markdown(
     """
-    <p style='text-align: center; color: #666; margin-bottom: 20px;'>
-    Powered by Multi-Agent AI Orchestration | Real-time Financial Intelligence
-    </p>
+    <div style='text-align: center; margin-bottom: 30px;'>
+        <p style='color: #6b7280; font-size: 1.1em; margin: 5px 0; font-weight: 500;'>
+            Powered by Multi-Agent AI Orchestration
+        </p>
+        <p style='color: #9ca3af; font-size: 0.95em; margin: 5px 0;'>
+            Real-time Financial Analysis • SEC Data • Market Intelligence
+        </p>
+    </div>
     """,
     unsafe_allow_html=True,
 )
@@ -748,32 +950,52 @@ with st.sidebar:
             _pnl = _pf.get("total_pnl", 0)
             _pnl_pct = _pf.get("total_pnl_pct", 0)
 
+            # Enhanced metrics display
             col1, col2 = st.columns(2)
             with col1:
-                st.metric("Total Value", f"${_pf.get('total_value', 0):,.2f}")
+                st.markdown("""
+                    <div class='metric-box'>
+                        <div class='metric-label'>Total Value</div>
+                        <div class='metric-value'>$""" + f"{_pf.get('total_value', 0):,.2f}" + """</div>
+                    </div>
+                """, unsafe_allow_html=True)
             with col2:
-                st.metric("Cash", f"${_pf.get('cash', 0):,.2f}")
+                st.markdown("""
+                    <div class='metric-box'>
+                        <div class='metric-label'>Cash Balance</div>
+                        <div class='metric-value'>$""" + f"{_pf.get('cash', 0):,.2f}" + """</div>
+                    </div>
+                """, unsafe_allow_html=True)
 
-            pnl_delta_color = "normal" if _pnl >= 0 else "inverse"
-            st.metric("Unrealised P&L", f"${_pnl:+,.2f}", delta=f"{_pnl_pct:+.2f}%", delta_color="normal")
-            st.caption("% return on positions cost basis")
+            pnl_color = "#10b981" if _pnl >= 0 else "#ef4444"
+            pnl_symbol = "📈" if _pnl >= 0 else "📉"
+            st.markdown(f"""
+                <div class='metric-box' style='border-left: 5px solid {pnl_color};'>
+                    <div class='metric-label'>Unrealised P&L</div>
+                    <div class='metric-value' style='color: {pnl_color};'>
+                        {pnl_symbol} ${_pnl:+,.2f}
+                    </div>
+                    <div style='font-size: 0.9em; color: #6b7280;'>{_pnl_pct:+.2f}%</div>
+                </div>
+            """, unsafe_allow_html=True)
 
             holdings = _pf.get("holdings", [])
             if holdings:
-                st.markdown("**Positions**")
+                st.markdown("**📍 Holdings**")
                 rows = ""
                 for h in holdings:
                     pnl = h.get("unrealised_pnl", 0)
                     pnl_pct = h.get("unrealised_pct", 0)
-                    pnl_color = "#28a745" if pnl >= 0 else "#dc3545"
+                    pnl_color = "#10b981" if pnl >= 0 else "#ef4444"
+                    pnl_icon = "▲" if pnl >= 0 else "▼"
                     rows += (
                         f"<tr>"
                         f"<td><b>{h['ticker']}</b></td>"
                         f"<td>${h.get('live_price', 0):,.2f}</td>"
                         f"<td>${h.get('market_value', 0):,.2f}</td>"
                         f"<td>{h.get('allocation_pct', 0)}%</td>"
-                        f"<td style='color:{pnl_color}'>{pnl:+.2f}<br>"
-                        f"<small>({pnl_pct:+.1f}%)</small></td>"
+                        f"<td style='color:{pnl_color}'>{pnl_icon} {pnl:+.2f}<br>"
+                        f"<small style='opacity:0.8'>({pnl_pct:+.1f}%)</small></td>"
                         f"</tr>"
                     )
                 st.markdown(
@@ -883,78 +1105,30 @@ with st.sidebar:
     st.markdown("### 📖 Help & Examples")
     st.markdown("""
     **What can I ask?**
-    
-    **📊 Research & Analysis:**
-    - "Analyze NVDA earnings and future growth"
-    - "Should I buy TSLA?"
-    - "Compare Microsoft vs Google valuations"
-    - "What are the risks in my portfolio?"
-    
-    **💼 Portfolio Management:**
-    - "Show me my portfolio"
-    - "Analyze my positions and diversification"
-    - "What's my portfolio concentration?"
-    - "Check for any risk alerts in my holdings"
-    
-    **💰 Trading:**
-    - "Buy $50 of AAPL"
-    - "Sell 5 shares of NVDA"
-    - "Buy $100 worth of MSFT"
-    
-    **📚 Educational:**
-    - "What is market cap?"
-    - "Explain P/E ratio and valuation"
-    - "How does beta affect portfolio risk?"
+    *   **📊 Research:** `"Analyze NVDA"` | `"Compare MSFT vs GOOG"` | `"Should I buy TSLA?"`
+    *   **💰 Trading:** `"Buy $500 of NVDA"` | `"Sell $100 shares of Tesla stock"`
+    *   **💼 Portfolio:** `"Show my portfolio"` | `"What's my concentration?"`
+    *   **📚 Education:** `"What is market cap?"` | `"Explain P/E ratio"`
     """)
     
     st.divider()
     
     st.markdown("### 🎯 AI Agent Skills")
     st.markdown("""
-    The platform includes three integrated AI skills that enhance analysis:
-    
-    **1️⃣ Portfolio Analyzer**
-    - Evaluates asset allocation & diversification
-    - Calculates sector concentration risk
-    - Provides optimization recommendations
-    - *Try: "Analyze my positions" or "Show me portfolio diversification"*
-    
-    **2️⃣ Risk Manager**
-    - Assesses portfolio volatility (beta)
-    - Evaluates correlation risk between holdings
-    - Identifies liquidity risk
-    - Generates composite risk score (0-100)
-    - *Try: "What's my portfolio risk?" or "Analyze risk in my holdings"*
-    
-    **3️⃣ Stop-Loss/Take-Profit Triggers**
-    - Monitors concentration thresholds (50% alert)
-    - Detects stop-loss opportunities (-10%)
-    - Identifies take-profit opportunities (+30%)
-    - Flags correlated position risks
-    - *Try: "Check my stop-loss and take-profit levels" or "Monitor my triggers"*
+    1.  **Portfolio Analyzer:** Evaluates asset allocation, diversification, and optimization. *(Try: "Analyze my positions")*
+    2.  **Risk Manager:** Assesses volatility (beta), correlation, and liquidity risk scores (0-100). *(Try: "What's my portfolio risk?")*
+    3.  **Smart Triggers:** Tracks stop-loss (-10%), take-profit (+30%), and allocation alerts (50%). *(Try: "Monitor my triggers")*
     """)
     
     st.divider()
     
-    st.markdown("### 💬 Follow-up Questions (Context-Aware)")
+    st.markdown("### 💬 Context-Aware Follow-ups")
     st.markdown("""
-    The system remembers your conversation and resolves ambiguous references:
+    The engine retains conversational context, resolving ambiguous follow-ups automatically:
     
-    **Example Flow 1 - Competitor Analysis:**
-    1. Ask: **"Analyze TSLA"**
-    2. Follow up: **"How does profitability compare to competitors?"**
-    
-    **Example Flow 2 - Risk Drill-Down:**
-    1. Ask: **"Show me my portfolio"**
-    2. Follow up: **"What's my largest risk factor?"**
-    
-    **Example Flow 3 - Trading Decision:**
-    1. Ask: **"Analyze AAPL"**
-    2. Follow up: **"Should I add to this position or avoid it?"**
-    
-    **How it works:** The AI extracts ticker symbols and context from your conversation history,
-    fetches relevant data (competitors, sector data, fundamentals), and provides contextual answers
-    without you having to repeat the ticker or context.
+    *   **Flow 1:** `"Analyze TSLA"` ➔ `"How does profitability compare to competitors?"`
+    *   **Flow 2:** `"Show me my portfolio"` ➔ `"What's my largest risk factor?"`
+    *   **Flow 3:** `"Analyze AAPL"` ➔ `"Should I add to this position?"`
     """)
     
     st.divider()
@@ -982,7 +1156,16 @@ with st.sidebar:
 # MAIN CONTENT - CHAT INTERFACE
 # ============================================================================
 
-st.markdown("### 💬 Analysis Interface")
+st.markdown("""
+<div style='background: linear-gradient(135deg, #667eea15 0%, #764ba215 100%); 
+            padding: 20px; border-radius: 12px; margin-bottom: 20px; 
+            border-left: 5px solid #667eea;'>
+    <h3 style='margin: 0; color: #1f2937;'>💬 Analysis Interface</h3>
+    <p style='margin: 5px 0 0 0; color: #6b7280; font-size: 0.95em;'>
+        Ask questions about stocks, market analysis, or your portfolio
+    </p>
+</div>
+""", unsafe_allow_html=True)
 
 # Display chat history
 for message in st.session_state.messages:
@@ -1045,7 +1228,7 @@ if st.session_state.get("last_completed_trade"):
 # Chat input box
 # Chat input box — also accepts pre-fills from sidebar "Deep Analysis" button
 user_input = st.chat_input(
-    "Enter a ticker or analysis prompt (e.g., Analyze NVDA, show my portfolio)...",
+    "🔍 Ask about stocks, market trends, or analyze your portfolio...",
     key="user_input",
 )
 
@@ -1331,16 +1514,18 @@ if st.session_state.get("pending_approval_request") and not st.session_state.get
 
 st.divider()
 
-col1, col2, col3 = st.columns(3)
-
-with col1:
-    st.info("💻 **Frontend**: Streamlit")
-
-with col2:
-    st.info("⚙️ **Backend**: FastAPI + Uvicorn")
-
-with col3:
-    st.info("🧠 **Orchestration**: LangGraph State Machine")
+# About / Technical Stack (Collapsible)
+with st.expander("ℹ️ About This Platform"):
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.info("💻 **Frontend**: Streamlit")
+    
+    with col2:
+        st.info("⚙️ **Backend**: FastAPI + Uvicorn")
+    
+    with col3:
+        st.info("🧠 **Orchestration**: LangGraph State Machine")
 
 st.markdown("""
 ---

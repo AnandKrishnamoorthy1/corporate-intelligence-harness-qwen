@@ -58,17 +58,58 @@ class MockSimulationEngine(BaseBroker):
         logger.info(f"   Accounts: {len(self.ledger.get('accounts', {}))}")
     
     def _load_or_init_ledger(self):
-        """Load existing simulation ledger or create new one."""
+        """Load existing simulation ledger or create new one with default portfolio."""
         if self.db_path.exists():
             try:
                 with open(self.db_path, 'r') as f:
                     self.ledger = json.load(f)
                 logger.debug(f"Loaded existing simulation ledger")
             except Exception as e:
-                logger.warning(f"Failed to load ledger: {e}. Creating new one.")
-                self.ledger = self._create_blank_ledger()
+                logger.warning(f"Failed to load ledger: {e}. Creating new one with defaults.")
+                self.ledger = self._create_ledger_with_defaults()
         else:
-            self.ledger = self._create_blank_ledger()
+            self.ledger = self._create_ledger_with_defaults()
+    
+    def _create_ledger_with_defaults(self) -> Dict:
+        """Create simulation ledger initialized with default portfolio."""
+        try:
+            default_portfolio_path = Path(__file__).parent.parent / "config" / "default_portfolio.json"
+            if default_portfolio_path.exists():
+                with open(default_portfolio_path, 'r') as f:
+                    default_data = json.load(f)
+                
+                # Convert default portfolio to ledger format
+                account_id = default_data.get("account_id", "default")
+                positions = {}
+                for ticker, pos_data in default_data.get("positions", {}).items():
+                    positions[ticker] = {
+                        "ticker": ticker,
+                        "shares": pos_data["shares"],
+                        "entry_price": pos_data["entry_price"],
+                        "current_price": pos_data["current_price"],
+                        "quantity": pos_data["shares"]
+                    }
+                
+                return {
+                    "accounts": {
+                        account_id: {
+                            "id": account_id,
+                            "account_type": "paper_trading",
+                            "cash_balance": default_data.get("cash_balance", 10000.0),
+                            "portfolio_value": default_data.get("cash_balance", 10000.0),
+                            "positions": positions,
+                            "created_at": datetime.now().isoformat(),
+                        }
+                    },
+                    "orders": [],
+                    "positions": positions,
+                }
+            else:
+                logger.warning(f"Default portfolio not found at {default_portfolio_path}")
+                return self._create_blank_ledger()
+        except Exception as e:
+            logger.error(f"Failed to load default portfolio: {e}")
+            return self._create_blank_ledger()
     
     def _create_blank_ledger(self) -> Dict:
         """Create a blank simulation ledger structure."""
