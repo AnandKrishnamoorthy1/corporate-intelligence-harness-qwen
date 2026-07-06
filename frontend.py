@@ -19,6 +19,7 @@ import streamlit as st
 import re
 import requests
 import json
+import os
 from datetime import datetime, timedelta
 from typing import Optional
 import time
@@ -282,7 +283,17 @@ if "last_completed_trade" not in st.session_state:
 # CONFIGURATION & CONSTANTS
 # ============================================================================
 
-API_BASE_URL = "http://localhost:8002"
+# Environment-aware backend routing:
+# 1. Try Streamlit Cloud Secrets (Production)
+# 2. Fall back to .env / local environment (Development)
+if "BACKEND_API_URL" in st.secrets:
+    API_BASE_URL = st.secrets["BACKEND_API_URL"]
+else:
+    API_BASE_URL = os.getenv("BACKEND_API_URL", "http://localhost:9000")
+
+# Clean up any accidental trailing slashes
+API_BASE_URL = API_BASE_URL.rstrip("/")
+
 API_HEALTH_ENDPOINT = f"{API_BASE_URL}/health"
 API_ANALYZE_ENDPOINT = f"{API_BASE_URL}/api/analyze"
 API_ANALYZE_STREAM_ENDPOINT = f"{API_BASE_URL}/api/analyze/stream"
