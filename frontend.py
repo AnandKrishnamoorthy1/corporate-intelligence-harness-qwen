@@ -184,7 +184,7 @@ def _escape_currency(text: str) -> str:
 
 st.set_page_config(
     page_title="Corporate Intelligence Engine",
-    page_icon="📊",
+    page_icon="favicon.ico",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -192,6 +192,16 @@ st.set_page_config(
 # Modern CSS for enhanced UI/UX
 st.markdown("""
 <style>
+    /* Color Palette */
+    :root {
+        --primary-purple: #667eea;
+        --primary-dark-purple: #764ba2;
+        --alibaba-orange: #FF6600;
+        --alibaba-light-orange: #FF8C42;
+        --success: #10b981;
+        --error: #ef4444;
+    }
+    
     /* Typography & General */
     * {
         font-family: 'Segoe UI', 'Helvetica Neue', sans-serif;
@@ -200,23 +210,28 @@ st.markdown("""
     h1, h2, h3 {
         font-weight: 600;
         letter-spacing: -0.5px;
+        font-size: 1.3em;
     }
+    
+    h1 { font-size: 1.5em; }
+    h2 { font-size: 1.35em; }
+    h3 { font-size: 1.2em; }
     
     /* Main Container */
     .main {
         background: linear-gradient(135deg, #f5f7fa 0%, #f9fafb 100%);
     }
     
-    /* Header & Title */
+    /* Header & Title - Alibaba inspired gradient */
     .main-title {
         text-align: center;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        background: linear-gradient(135deg, #FF6600 0%, #FF8C42 100%);
         color: white;
         padding: 40px 20px;
         margin: -80px -80px 30px -80px;
         border-radius: 0 0 20px 20px;
-        box-shadow: 0 10px 30px rgba(102, 126, 234, 0.2);
-        font-size: 2.5em;
+        box-shadow: 0 10px 30px rgba(255, 102, 0, 0.2);
+        font-size: 2.0em;
         font-weight: 700;
     }
     
@@ -237,11 +252,11 @@ st.markdown("""
     }
     
     .status-box {
-        background: linear-gradient(135deg, #667eea15 0%, #764ba215 100%);
+        background: linear-gradient(135deg, #FF660015 0%, #FF8C4215 100%);
         padding: 20px;
         border-radius: 12px;
-        border-left: 5px solid #667eea;
-        border: 1px solid rgba(102, 126, 234, 0.2);
+        border-left: 5px solid #FF6600;
+        border: 1px solid rgba(255, 102, 0, 0.2);
     }
     
     .status-box.success {
@@ -317,8 +332,8 @@ st.markdown("""
     }
     
     .metric-box:hover {
-        border-color: #667eea;
-        box-shadow: 0 4px 12px rgba(102, 126, 234, 0.1);
+        border-color: #FF6600;
+        box-shadow: 0 4px 12px rgba(255, 102, 0, 0.15);
     }
     
     .metric-value {
@@ -329,7 +344,7 @@ st.markdown("""
     }
     
     .metric-label {
-        font-size: 0.9em;
+        font-size: 1.0em;
         color: #6b7280;
         font-weight: 500;
     }
@@ -337,7 +352,7 @@ st.markdown("""
     /* Logs & Code */
     .log-entry {
         font-family: 'Fira Code', 'Monaco', monospace;
-        font-size: 0.85em;
+        font-size: 0.95em;
         line-height: 1.6;
         color: #374151;
         background: #f9fafb;
@@ -369,11 +384,11 @@ st.markdown("""
     table {
         border-collapse: collapse;
         width: 100%;
-        font-size: 0.95em;
+        font-size: 1.0em;
     }
     
     th {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        background: linear-gradient(135deg, #FF6600 0%, #FF8C42 100%);
         color: white;
         padding: 12px;
         text-align: left;
@@ -389,9 +404,9 @@ st.markdown("""
         background-color: #f9fafb;
     }
     
-    /* Buttons */
+    /* Buttons - Alibaba Orange */
     button {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        background: linear-gradient(135deg, #FF6600 0%, #FF8C42 100%);
         color: white;
         border: none;
         padding: 10px 20px;
@@ -402,7 +417,7 @@ st.markdown("""
     }
     
     button:hover {
-        box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        box-shadow: 0 4px 12px rgba(255, 102, 0, 0.4);
         transform: translateY(-2px);
     }
     
@@ -421,8 +436,8 @@ st.markdown("""
     }
     
     input:focus, textarea:focus, select:focus {
-        border-color: #667eea !important;
-        box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1) !important;
+        border-color: #FF6600 !important;
+        box-shadow: 0 0 0 3px rgba(255, 102, 0, 0.1) !important;
     }
     
     /* Prevent stale element fading during long computations */
@@ -1157,9 +1172,9 @@ with st.sidebar:
 # ============================================================================
 
 st.markdown("""
-<div style='background: linear-gradient(135deg, #667eea15 0%, #764ba215 100%); 
+<div style='background: linear-gradient(135deg, #FF660015 0%, #FF8C4215 100%); 
             padding: 20px; border-radius: 12px; margin-bottom: 20px; 
-            border-left: 5px solid #667eea;'>
+            border-left: 5px solid #FF6600;'>
     <h3 style='margin: 0; color: #1f2937;'>💬 Analysis Interface</h3>
     <p style='margin: 5px 0 0 0; color: #6b7280; font-size: 0.95em;'>
         Ask questions about stocks, market analysis, or your portfolio
