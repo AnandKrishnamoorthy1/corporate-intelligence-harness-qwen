@@ -1,6 +1,6 @@
-# Corporate Intelligence Engine — Qwen Edition
+# Corporate Intelligence Engine
 
-**Track 4 Submission — Qwen Cloud Global AI Hackathon: Autopilot Agent**
+**Track 4 Submission — Qwen Cloud x Hackathon: Autopilot Agent**
 
 A production-grade agentic trading system powered by **Alibaba Qwen** (`qwen3.7-plus`). A **Tri-Agent Adversarial Investment Committee** — Bull Analyst, Bear Auditor, and Portfolio Director — debates live market data from SEC EDGAR before issuing a vetted BUY / HOLD / SELL verdict. Every trade requires explicit human approval before executing against a paper-trading simulation.
 
@@ -36,7 +36,7 @@ A production-grade agentic trading system powered by **Alibaba Qwen** (`qwen3.7-
 **Backend:** Deployed on [Alibaba Cloud Function Compute 3.0](https://www.alibabacloud.com/product/function-compute)
 - Serverless runtime: `custom.debian11` with Python 3.12
 - HTTP trigger endpoint provided by Alibaba console
-- Cost: ~$0.05/month + Qwen token costs (scales to zero when idle)
+- Cost: ~$5/month + Qwen token costs (scales to zero when idle)
 
 **Try it now:**
 - Open your Streamlit app URL
@@ -66,7 +66,6 @@ python -m uvicorn backend:app --host 0.0.0.0 --port 9000 --reload
 streamlit run frontend.py
 ```
 
-Open `http://localhost:8501` and the frontend will automatically connect to `http://localhost:9000`
 
 ---
 

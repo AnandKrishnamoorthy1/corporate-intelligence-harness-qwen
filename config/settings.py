@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     # ========================================================================
     
     backend_host: str = Field(default="0.0.0.0", env="BACKEND_HOST")
-    backend_port: int = Field(default=8000, env="BACKEND_PORT")
+    backend_port: int = Field(default=9000, env="BACKEND_PORT")  # Changed from 8000 to 9000 (Alibaba Cloud FC requirement)
     backend_reload: bool = Field(default=True, env="BACKEND_RELOAD")
     backend_log_level: str = Field(default="info", env="BACKEND_LOG_LEVEL")
     

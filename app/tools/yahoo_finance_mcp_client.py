@@ -14,6 +14,7 @@ import asyncio
 import json
 import sys
 import os
+import subprocess
 import threading
 from typing import Any, Dict, List, Optional
 
@@ -87,19 +88,42 @@ class YahooFinanceMCPClient:
         from mcp import ClientSession, StdioServerParameters
         from mcp.client.stdio import stdio_client
 
+        # Prepare bulletproof environment for MCP subprocess
+        # Even if bootstrap partially fails, this ensures the subprocess can find all modules
+        env = os.environ.copy()
+        
+        # Explicitly inject cloud runtime locations into PYTHONPATH
+        # This makes the subprocess independent of parent environment state
+        pythonpath_dirs = [
+            "/code",          # Application code
+            "/opt/python",    # Custom layer (from s build --use-docker)
+            env.get("PYTHONPATH", "")  # Preserve any existing PYTHONPATH
+        ]
+        env["PYTHONPATH"] = ":".join(filter(None, pythonpath_dirs))
+        logger.info(f"[MCP] Subprocess PYTHONPATH: {env['PYTHONPATH']}")
+
         # Locate the installed entry-point executable
         scripts_dir = os.path.join(os.path.dirname(sys.executable), "Scripts")
         exe = os.path.join(scripts_dir, "yahoo-finance-mcp.exe")
         if not os.path.exists(exe):
             exe = os.path.join(scripts_dir, "yahoo-finance-mcp")
         if not os.path.exists(exe):
-            # Fallback: run the installed server module directly
+            # Fallback: run the package's server module directly
+            # -m flag executes the package's internal server entry point
             exe = sys.executable
-            args = ["-c", "from server import mcp; mcp.run()"]
+            args = ["-m", "yahoo_finance_mcp.server"]
         else:
             args = []
 
-        server_params = StdioServerParameters(command=exe, args=args)
+        # Suppress subprocess stdout/stderr to prevent startup messages from
+        # polluting the JSON-RPC stdio channel (which causes ValidationError)
+        server_params = StdioServerParameters(
+            command=exe, 
+            args=args, 
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
         logger.info(f"[MCP] Starting Yahoo Finance MCP server: {exe}")
 
         # Keep references so the context managers stay alive

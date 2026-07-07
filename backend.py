@@ -1115,13 +1115,13 @@ async def value_error_handler(request, exc):
 if __name__ == "__main__":
     print("\n" + "#" * 80)
     print("# Corporate Intelligence Engine - FastAPI Backend")
-    print("# Starting Uvicorn server...")
+    print("# Starting Uvicorn server on port 9000 (Alibaba Cloud FC requirement)...")
     print("#" * 80 + "\n")
     
     run(
         app,
         host="0.0.0.0",
-        port=settings.backend_port,
+        port=9000,  # CRITICAL: Hardcoded to 9000 for Alibaba Cloud FC health checks
         log_level="info",
         timeout_keep_alive=120,  # Keep connections alive for 120s
     )

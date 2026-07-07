@@ -366,9 +366,14 @@ def research_node(state: GraphState) -> GraphState:
                 shares = float(pos.get("quantity", 0))
                 avg_cost = float(pos.get("average_cost", 0))
                 pdata = live_prices.get(pos_ticker, {})
-                current_price = pdata.get("price", avg_cost)
+                current_price = pdata.get("price", avg_cost) or avg_cost or 1.0  # Fallback chain
                 market_value = shares * current_price
                 total_market_value += market_value
+                
+                # SAFETY: If avg_cost is 0, assume it equals current price (breakeven for simulated trades)
+                if avg_cost == 0 or avg_cost is None:
+                    avg_cost = current_price
+                    logger.debug(f"[PORTFOLIO] {pos_ticker}: avg_cost was 0, setting to current_price ${current_price}")
                 
                 position_list.append({
                     "ticker": pos_ticker,
@@ -386,21 +391,31 @@ def research_node(state: GraphState) -> GraphState:
                 "positions": [
                     {
                         "ticker": p["ticker"],
-                        "value": p["value"],
-                        "pct_of_portfolio": (p["value"] / total_portfolio_value * 100) if total_portfolio_value > 0 else 0,
-                        "sector": p["sector"],
                         "shares": p["shares"],
                         "avg_cost": p["avg_cost"],
                         "current_price": p["current_price"],
+                        "value": p["value"],
+                        "cost_basis": p["shares"] * p["avg_cost"],
+                        "unrealized_pnl": p["value"] - (p["shares"] * p["avg_cost"]),
+                        "unrealized_pnl_pct": ((p["value"] - (p["shares"] * p["avg_cost"])) / (p["shares"] * p["avg_cost"]) * 100) if (p["shares"] * p["avg_cost"]) > 0 else 0,
+                        "pct_of_portfolio": (p["value"] / total_portfolio_value * 100) if total_portfolio_value > 0 else 0,
+                        "sector": p["sector"],
                     }
                     for p in position_list
                 ],
                 "history": position_list,
                 "total_value": total_portfolio_value,
                 "cash": cash,
+                "total_invested": total_market_value,
             }
             
             logger.info(f"Portfolio data built: {len(position_list)} position(s), ${total_portfolio_value:,.2f} total value")
+            # Log sample position for debugging
+            if portfolio_data_for_skills["positions"]:
+                sample = portfolio_data_for_skills["positions"][0]
+                logger.debug(f"[PORTFOLIO] Sample position: {sample['ticker']} - shares={sample['shares']}, "
+                           f"avg_cost=${sample['avg_cost']:.2f}, current=${sample['current_price']:.2f}, "
+                           f"P&L={sample['unrealized_pnl_pct']:+.2f}%")
     
     except Exception as e:
         logger.warning(f"Could not fetch portfolio data for skills: {e}")
@@ -618,14 +633,14 @@ def general_q_node(state: GraphState) -> GraphState:
     )
     
     competitor_context = ""
+    target_context = ""  # ADD: Build context for the target company
     if is_competitor_question and state.get('current_target_ticker'):
         ticker = state['current_target_ticker']
         logger.info(f"[GENERAL Q] Competitor analysis detected for {ticker}")
         
         try:
             # ────────────────────────────────────────────────────────────────────
-            # LLM-DRIVEN COMPETITOR IDENTIFICATION
-            # Ask Qwen to identify the top 3 competitors for this ticker
+            # FETCH TARGET COMPANY DATA
             # ────────────────────────────────────────────────────────────────────
             
             from app.tools.yahoo_finance_mcp_client import YahooFinanceMCPClient
@@ -639,6 +654,54 @@ def general_q_node(state: GraphState) -> GraphState:
                 target_name = target_info.get('shortName', ticker)
                 target_sector = target_info.get('sector', 'Unknown')
                 logger.info(f"[GENERAL Q] {ticker} ({target_name}) - Sector: {target_sector}")
+                
+                # BUILD TARGET CONTEXT (ADD THIS SECTION)
+                target_context = f"\n\n## Target Company ({ticker}):\n"
+                target_context += f"**{ticker}** ({target_name})\n"
+                
+                try:
+                    price = float(target_info.get('regularMarketPrice') or target_info.get('currentPrice') or 0)
+                    target_context += f"- Price: ${price:.2f}\n" if price > 0 else "- Price: N/A\n"
+                except (ValueError, TypeError):
+                    target_context += "- Price: N/A\n"
+                
+                try:
+                    profit_margin = target_info.get('profitMargins')
+                    if profit_margin is not None and profit_margin != '':
+                        target_context += f"- Profit Margin: {float(profit_margin)*100:.2f}%\n"
+                    else:
+                        target_context += "- Profit Margin: N/A\n"
+                except (ValueError, TypeError):
+                    target_context += "- Profit Margin: N/A\n"
+                
+                try:
+                    roe = target_info.get('returnOnEquity')
+                    if roe is not None and roe != '':
+                        target_context += f"- ROE: {float(roe)*100:.2f}%\n"
+                    else:
+                        target_context += "- ROE: N/A\n"
+                except (ValueError, TypeError):
+                    target_context += "- ROE: N/A\n"
+                
+                try:
+                    pe = target_info.get('trailingPE') or target_info.get('forwardPE')
+                    if pe is not None and pe != '' and float(pe) > 0:
+                        target_context += f"- P/E: {float(pe):.2f}\n"
+                    else:
+                        target_context += "- P/E: N/A\n"
+                except (ValueError, TypeError):
+                    target_context += "- P/E: N/A\n"
+                
+                try:
+                    revenue_growth = target_info.get('revenueGrowth')
+                    if revenue_growth is not None and revenue_growth != '':
+                        target_context += f"- Revenue Growth: {float(revenue_growth)*100:.2f}%\n"
+                    else:
+                        target_context += "- Revenue Growth: N/A\n"
+                except (ValueError, TypeError):
+                    target_context += "- Revenue Growth: N/A\n"
+                
+                logger.info(f"[GENERAL Q] Target context prepared ({len(target_context)} chars)")
                 
                 # Ask Qwen to identify competitors
                 competitor_query = (
@@ -776,14 +839,15 @@ def general_q_node(state: GraphState) -> GraphState:
             competitor_context = f"\n\n(Note: Unable to fetch competitor data - {str(e)})"
     
     # ────────────────────────────────────────────────────────────────────
-    # QWEN GENERAL Q&A WITH COMPETITOR CONTEXT
+    # QWEN GENERAL Q&A WITH TARGET + COMPETITOR CONTEXT
     # ────────────────────────────────────────────────────────────────────
     
     try:
         logger.info("Invoking Qwen for general Q&A...")
         
-        # Enhance user input with competitor context if applicable
-        enhanced_input = state['user_input'] + competitor_context
+        # Enhance user input with BOTH target and competitor context if applicable
+        # Target goes first (primary focus), then competitors for comparison
+        enhanced_input = state['user_input'] + target_context + competitor_context
 
         answer = call_qwen_for_general_qa(
             enhanced_input,
