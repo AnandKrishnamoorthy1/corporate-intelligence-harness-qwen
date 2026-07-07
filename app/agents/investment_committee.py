@@ -42,38 +42,24 @@ from app.llm import call_qwen_persona, call_qwen_with_structured_output
 def _format_debate_bullets(text: str) -> str:
     """Ensure debate bullet points (•) are on separate lines.
     
-    Fixes issues where LLM generates multiple bullet points on a single line:
-    "• Point 1 • Point 2" → "• Point 1\n• Point 2"
-    
-    Applied to Investment Committee debate arguments to ensure clean formatting.
+    Split on bullet character and rebuild with double newlines (markdown breaks).
+    "• Point 1 • Point 2" → "• Point 1\n\n• Point 2"
     """
-    # Repeatedly apply substitution until all bullets are separated
-    max_iterations = 50
-    iteration = 0
-    prev_text = ""
+    # Split the text on bullet characters
+    parts = text.split('•')
     
-    while iteration < max_iterations and prev_text != text:
-        prev_text = text
-        
-        # Pattern 0: Handle case where closing ** immediately precedes bullet
-        # "**text** • " → "**text**\n• "
-        text = re.sub(r'(\*\*)\s+(•\s+)', r'\1\n\2', text)
-        
-        # Pattern 1: bullet + text + space + bullet (most common case)
-        # "• text • " → "• text\n• "
-        text = re.sub(r'(•\s+[^•\n]+?)\s+(•\s+)', r'\1\n\2', text)
-        
-        # Pattern 2: any non-newline + space + bullet (catches cases where bullet isn't properly preceded)
-        # "text • " → "text\n• "
-        text = re.sub(r'([^\n])\s+(•\s+)', r'\1\n\2', text)
-        
-        # Pattern 3: colon followed by content followed by bullet
-        # ": content • " → ": content\n• "
-        text = re.sub(r'(:\s+[^\n•]+?)\s+(•\s+)', r'\1\n\2', text)
-        
-        iteration += 1
+    # First part (before any bullet) doesn't need a bullet prefix
+    result = [parts[0].strip()]
     
-    return text
+    # Each subsequent part gets a bullet prefix on a new line
+    for part in parts[1:]:
+        stripped = part.strip()
+        if stripped:
+            result.append('• ' + stripped)
+    
+    # Join with double newlines (paragraph breaks in markdown)
+    return '\n\n'.join(result)
+
 
 
 # ============================================================================
@@ -118,6 +104,12 @@ _BULL_SYSTEM = """You are the BULL ANALYST on an institutional investment commit
 Quantitative Growth specialist. Your mandate is to build the strongest possible
 evidence-based LONG (bullish) case for the stock under review.
 
+MARKDOWN FORMATTING - CRITICAL:
+- Each bullet point MUST be on its own line. Never concatenate bullets: "• Point1 • Point2" is WRONG.
+- Correct format: "• Point1\n• Point2" with each bullet on a separate line.
+- Use ** for bold labels within bullets: "• **Label:** description text"
+- Keep sections clearly separated with blank lines between major arguments.
+
 Rules:
 - Argue ONLY from the market-data payload you are given. Cite exact numbers.
 - Be aggressive but intellectually honest — no invented fundamentals.
@@ -134,6 +126,12 @@ _BEAR_SYSTEM = """You are the BEAR AUDITOR on an institutional investment commit
 Forensic Risk specialist. Your mandate is to build the strongest possible
 evidence-based SHORT (bearish) / caution case for the stock under review.
 
+MARKDOWN FORMATTING - CRITICAL:
+- Each bullet point MUST be on its own line. Never concatenate bullets: "• Point1 • Point2" is WRONG.
+- Correct format: "• Point1\n• Point2" with each bullet on a separate line.
+- Use ** for bold labels within bullets: "• **Label:** description text"
+- Keep sections clearly separated with blank lines between major arguments.
+
 Rules:
 - Argue ONLY from the market-data payload you are given. Cite exact numbers.
 - Hunt for downside: momentum exhaustion, valuation stretch, volume anomalies, volatility.
@@ -147,6 +145,12 @@ Never output a final recommendation — that is the Director's job."""
 _DIRECTOR_SYSTEM = """You are the PORTFOLIO DIRECTOR chairing an institutional investment
 committee, acting as the compliance officer of record. Two analysts (Bull and Bear)
 have debated a stock using a shared market-data payload.
+
+MARKDOWN FORMATTING - CRITICAL:
+- Use clean, well-formatted markdown with proper line breaks.
+- Each bullet point MUST be on its own line if you use bullets.
+- Use ** for bold labels and emphasis.
+- Keep the verdict summary clearly formatted and easy to read.
 
 Your mandate:
 - Weigh both cases strictly on evidence quality, not rhetoric.
@@ -480,6 +484,10 @@ class InvestmentCommittee:
         logger.info("=" * 80)
         logger.info(f"[COMMITTEE] Convening investment committee for {ticker}")
         logger.info(f"[COMMITTEE] Debate rounds: {self.rounds}")
+        # DEBUG: Validate ticker matches market data
+        market_ticker = market_data.get('ticker', 'UNKNOWN')
+        if market_ticker != 'UNKNOWN' and market_ticker != ticker:
+            logger.warning(f"[COMMITTEE] ⚠️ TICKER MISMATCH: Received ticker={ticker} but market_data has ticker={market_ticker}")
         logger.info("-" * 80)
 
         evidence = _format_evidence(ticker, market_data)
@@ -525,9 +533,20 @@ def render_committee_report(
     verdict: CommitteeVerdict,
 ) -> str:
     """Render the full committee proceedings as a judge-friendly markdown report."""
+    # DEBUG: Log what we're rendering
+    logger.info(f"[RENDER] Generating report for ticker: {ticker}")
+    logger.debug(f"[RENDER] Market data keys: {list(market_data.keys())}")
+    logger.debug(f"[RENDER] Market data ticker: {market_data.get('ticker', 'NOT SET')}")
+    
+    # Safety: If market_data has a different ticker, log warning
+    market_ticker = market_data.get('ticker', None)
+    if market_ticker and market_ticker != ticker:
+        logger.warning(f"[RENDER] ⚠️ TICKER MISMATCH in render_committee_report: param ticker={ticker} but market_data[ticker]={market_ticker}")
+    
     verdict_emoji = {"BUY": "🟢", "HOLD": "🟡", "SELL": "🔴"}.get(verdict.verdict, "⚪")
 
     lines: List[str] = []
+    logger.info(f"[RENDER] Writing header: Investment Committee Verdict: {ticker}")
     lines.append(f"# 🏛️ Investment Committee Verdict: {ticker}")
     lines.append("")
     lines.append(
@@ -739,8 +758,12 @@ def run_investment_committee(
         - transcript: list of DebateTurn as dicts
         - report_markdown: rendered proceedings
     """
+    logger.info(f"[COMMITTEE ENTRY] run_investment_committee called with ticker={ticker}")
+    logger.debug(f"[COMMITTEE ENTRY] market_data ticker: {market_data.get('ticker', 'NOT SET')}")
+    
     committee = InvestmentCommittee(rounds=rounds)
     turns, verdict = committee.deliberate(ticker, market_data)
+    logger.info(f"[COMMITTEE REPORT] Calling render_committee_report with ticker={ticker}")
     report = render_committee_report(ticker, market_data, turns, verdict)
     return {
         "verdict": verdict.model_dump(),

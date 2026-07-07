@@ -223,13 +223,25 @@ def call_qwen_for_triage(user_input: str, conversation_history: list = None) -> 
     # Prepend recent conversation context so triage can resolve follow-ups
     # (e.g. "What about the bear case?" → know it's about the last ticker)
     history = conversation_history or []
-    # Extract last 3 user questions (not responses) for context
+    
+    # Use FULL conversation history (no truncation) to preserve ticker context
+    # Include both user messages and assistant responses for complete context
     recent = []
-    for turn in history[-6:]:  # Check last 6 turns to get up to 3 user questions
-        if turn.get("role") == "user":
-            content = turn.get("content", "")[:150]  # Increased to 150 chars for better context
-            content = content.replace('"', "'").replace("\\", "")  # Clean special chars
-            recent.append(content)
+    for turn in history[-10:]:  # Use all passed turns (up to 5 pairs = 10 messages)
+        role = turn.get("role", "")
+        content = turn.get("content", "").strip()
+        
+        # Include user messages in full, and assistant routing_decision metadata if present
+        if role == "user" and content:
+            recent.append(f"User: {content}")
+        elif role == "assistant" and content:
+            # For assistant messages, include key context (first 200 chars) + any routing decision
+            summary = content[:200] if len(content) > 200 else content
+            routing_decision = turn.get("routing_decision", "")
+            if routing_decision:
+                recent.append(f"Assistant (route: {routing_decision}): {summary}...")
+            else:
+                recent.append(f"Assistant: {summary}...")
     
     conversation_context = " | ".join(recent) if recent else "(no prior context)"
 
@@ -241,6 +253,37 @@ def call_qwen_for_triage(user_input: str, conversation_history: list = None) -> 
         response_schema=schema,
         model=settings.qwen_routing_model,  # Use configured routing model for fast intent classification
     )
+
+    # ────────────────────────────────────────────────────────────────────
+    # POST-PROCESS: Extract ticker explicitly from current query if Qwen misses it
+    # ────────────────────────────────────────────────────────────────────
+    import re
+    
+    logger.info(f"[TRIAGE DEBUG] Current user query: {user_input}")
+    logger.info(f"[TRIAGE DEBUG] Qwen extracted ticker: {response.get('ticker')}")
+    
+    # Pattern: look for uppercase 1-5 letter ticker symbols in current query
+    # Prioritize: explicit symbols like $TSLA, TSLA stock, buy TSLA, TSLA company, etc.
+    ticker_pattern = r'\b([A-Z]{1,5})\b'
+    matches = re.findall(ticker_pattern, user_input)
+    logger.info(f"[TRIAGE DEBUG] Regex found candidates: {matches}")
+    
+    # Filter for likely tickers (exclude common words like "A", "I", "THE", "BUY", "SELL", etc.)
+    common_words = {"A", "I", "THE", "AND", "BUY", "SELL", "HOLD", "YES", "NO", "FOR", "NOT", "ALL", "NEW", "OLD", "HOW", "WHY", "CAN", "MAY", "WILL", "SHOULD", "WOULD", "COULD", "WAS", "ARE", "BEEN", "HAS", "GET", "GIVE", "TAKE", "MAKE", "DO", "GO", "COME"}
+    explicit_tickers = [t for t in matches if t not in common_words and len(t) <= 5]
+    logger.info(f"[TRIAGE DEBUG] After filtering common words: {explicit_tickers}")
+    
+    # If current query has an explicit ticker, ALWAYS use it (override Qwen if necessary)
+    if explicit_tickers:
+        extracted_ticker = explicit_tickers[0]
+        if response.get("ticker") != extracted_ticker:
+            logger.info(f"[TICKER OVERRIDE] Overriding Qwen ticker '{response.get('ticker')}' with explicit query ticker '{extracted_ticker}'")
+            response["ticker"] = extracted_ticker
+            response["reasoning"] = f"Explicit ticker {extracted_ticker} found in current query. {response.get('reasoning', '')}"
+        else:
+            logger.info(f"[TICKER MATCH] Qwen correctly extracted {extracted_ticker}")
+    
+    logger.info(f"[TRIAGE DEBUG] Final response ticker: {response.get('ticker')}")
 
     return response
 

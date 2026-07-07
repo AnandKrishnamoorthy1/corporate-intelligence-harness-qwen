@@ -953,114 +953,144 @@ async def execute_approved_trade(request_id: str) -> Dict[str, Any]:
         request_id: ID of the approved trade to execute
         
     Returns:
-        dict: Execution result with trade confirmation or error details
+        dict: Execution result with trade confirmation, logs, and error details
         
     Raises:
         HTTPException: If request_id not found, not approved, or execution fails
     """
+    start_time = datetime.now()
+    
     logger.info(f"\n{'=' * 80}")
     logger.info(f"[EXECUTE] Received execution request for: {request_id}")
     logger.info(f"{'=' * 80}\n")
     
-    # Check if approval exists and was granted
-    approval = approval_store.get_approval(request_id)
-    if not approval:
-        logger.error(f"❌ No approval found for {request_id}")
-        raise HTTPException(
-            status_code=404,
-            detail=f"No approval record found for request {request_id}"
-        )
-    
-    if not approval.get("approved"):
-        logger.error(f"❌ Trade {request_id} was REJECTED, cannot execute")
-        raise HTTPException(
-            status_code=400,
-            detail=f"Trade {request_id} was rejected and cannot be executed"
-        )
-    
-    # Get pending trade details
-    pending_trade = pending_trade_store.get_pending_trade(request_id)
-    if not pending_trade:
-        logger.error(f"❌ No pending trade found for {request_id}")
-        raise HTTPException(
-            status_code=404,
-            detail=f"No pending trade found for request {request_id}"
-        )
-    
-    try:
-        logger.info(f"[EXECUTE] Executing trade: {pending_trade.get('action')} "
-                   f"{pending_trade.get('ticker')} - {pending_trade.get('amount')}")
-        
-        # Import here to avoid circular imports
-        from app.trading import get_broker_for_user, get_account_id_for_user
-        from app.trading.broker_interface import OrderSide
-        
-        # Get broker and account ID (respects BROKER_TYPE and ROBINHOOD_TRADING_ENABLED)
-        broker = get_broker_for_user()
-        account_id = get_account_id_for_user()
-        
-        # Extract trade details
-        ticker = pending_trade.get("ticker")
-        action = pending_trade.get("action")  # BUY or SELL
-        amount_dollars = pending_trade.get("amount_dollars")
-        quantity = pending_trade.get("quantity")
-        
-        # Convert action string to OrderSide enum
-        if action.upper() == "BUY":
-            side = OrderSide.BUY
-        elif action.upper() == "SELL":
-            side = OrderSide.SELL
-        else:
-            raise ValueError(f"Invalid trade action: {action}")
-        
-        logger.info(f"[EXECUTE] Calling broker with:")
-        logger.info(f"  - Account: {account_id}")
-        logger.info(f"  - Ticker: {ticker}")
-        logger.info(f"  - Side: {side.value}")
-        logger.info(f"  - Amount: ${amount_dollars}" if amount_dollars else f"  - Quantity: {quantity}")
-        
-        result = await broker.place_order(
-            account_id=account_id,
-            ticker=ticker,
-            side=side,
-            quantity=quantity,
-            amount_dollars=amount_dollars
-        )
-        
-        logger.info(f"✅ Trade executed successfully!")
-        logger.info(f"   Result: {result}")
-        
-        # Clear the pending trade after successful execution
-        pending_trade_store.clear_pending_trade(request_id)
-        
-        # Close broker connection
-        await broker.close()
-        
-        return {
-            "status": "success",
-            "request_id": request_id,
-            "execution_status": "completed",
-            "trade_details": {
-                "ticker": ticker,
-                "action": action,
-                "amount": pending_trade.get("amount"),
-                "quantity": quantity or "calculated from amount",
-            },
-            "message": f"Trade executed successfully for {ticker}",
-            "execution_result": result,
-            "timestamp": datetime.now().isoformat(),
-        }
-        
-    except Exception as e:
-        error_msg = f"Trade execution failed: {str(e)}"
-        logger.error(f"❌ {error_msg}")
-        import traceback
-        logger.error(traceback.format_exc())
-        
-        raise HTTPException(
-            status_code=500,
-            detail=error_msg
-        )
+    # Capture logs during trade execution
+    with log_capture.capture(request_id=request_id):
+        try:
+            logger.info(f"\n{'🔵 ' * 20}")
+            logger.info(f"[EXECUTE] ▶️  TRADE EXECUTION START FOR REQUEST {request_id}")
+            logger.info(f"{'🔵 ' * 20}\n")
+            
+            # Check if approval exists and was granted
+            approval = approval_store.get_approval(request_id)
+            if not approval:
+                logger.error(f"❌ No approval found for {request_id}")
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No approval record found for request {request_id}"
+                )
+            
+            if not approval.get("approved"):
+                logger.error(f"❌ Trade {request_id} was REJECTED, cannot execute")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Trade {request_id} was rejected and cannot be executed"
+                )
+            
+            # Get pending trade details
+            pending_trade = pending_trade_store.get_pending_trade(request_id)
+            if not pending_trade:
+                logger.error(f"❌ No pending trade found for {request_id}")
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No pending trade found for request {request_id}"
+                )
+            
+            logger.info(f"[EXECUTE] Executing trade: {pending_trade.get('action')} "
+                       f"{pending_trade.get('ticker')} - {pending_trade.get('amount')}")
+            
+            # Import here to avoid circular imports
+            from app.trading import get_broker_for_user, get_account_id_for_user
+            from app.trading.broker_interface import OrderSide
+            
+            # Get broker and account ID (respects BROKER_TYPE and ROBINHOOD_TRADING_ENABLED)
+            broker = get_broker_for_user()
+            account_id = get_account_id_for_user()
+            
+            # Extract trade details
+            ticker = pending_trade.get("ticker")
+            action = pending_trade.get("action")  # BUY or SELL
+            amount_dollars = pending_trade.get("amount_dollars")
+            quantity = pending_trade.get("quantity")
+            
+            # Convert action string to OrderSide enum
+            if action.upper() == "BUY":
+                side = OrderSide.BUY
+            elif action.upper() == "SELL":
+                side = OrderSide.SELL
+            else:
+                raise ValueError(f"Invalid trade action: {action}")
+            
+            logger.info(f"[EXECUTE] Calling broker with:")
+            logger.info(f"  - Account: {account_id}")
+            logger.info(f"  - Ticker: {ticker}")
+            logger.info(f"  - Side: {side.value}")
+            logger.info(f"  - Amount: ${amount_dollars}" if amount_dollars else f"  - Quantity: {quantity}")
+            
+            try:
+                result = await broker.place_order(
+                    account_id=account_id,
+                    ticker=ticker,
+                    side=side,
+                    quantity=quantity,
+                    amount_dollars=amount_dollars
+                )
+                
+                logger.info(f"✅ Trade executed successfully!")
+                logger.info(f"   Result: {result}")
+                
+                # Clear the pending trade after successful execution
+                pending_trade_store.clear_pending_trade(request_id)
+                
+                # Calculate execution time
+                execution_time = (datetime.now() - start_time).total_seconds() * 1000
+                
+                # Get captured logs
+                execution_logs = log_capture.get_logs()
+                logger.info(f"[EXECUTE] Captured {len(execution_logs)} log entries")
+                
+                return {
+                    "status": "success",
+                    "request_id": request_id,
+                    "execution_status": "completed",
+                    "trade_details": {
+                        "ticker": ticker,
+                        "action": action,
+                        "amount": pending_trade.get("amount"),
+                        "quantity": quantity or "calculated from amount",
+                    },
+                    "message": f"Trade executed successfully for {ticker}",
+                    "execution_result": result,
+                    "timestamp": datetime.now().isoformat(),
+                    "logs": execution_logs,  # Include captured logs
+                    "execution_time_ms": execution_time,  # Include timing
+                }
+            finally:
+                # Ensure broker is closed properly even if there's an error
+                try:
+                    if hasattr(broker, 'close'):
+                        await broker.close()
+                except Exception as close_err:
+                    logger.warning(f"[EXECUTE] Error closing broker: {close_err}")
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            error_msg = f"Trade execution failed: {str(e)}"
+            logger.error(f"❌ {error_msg}")
+            import traceback
+            logger.error(traceback.format_exc())
+            
+            execution_time = (datetime.now() - start_time).total_seconds() * 1000
+            
+            return {
+                "status": "error",
+                "request_id": request_id,
+                "execution_status": "failed",
+                "error": error_msg,
+                "logs": log_capture.get_logs(),  # Include captured logs even on error
+                "execution_time_ms": execution_time,
+            }
 
 
 # ============================================================================

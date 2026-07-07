@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     frontend_port: int = Field(default=8501, env="FRONTEND_PORT")
     
     api_request_timeout: int = Field(default=60, env="API_REQUEST_TIMEOUT")
+    backend_api_url: Optional[str] = Field(default="http://localhost:8002", env="BACKEND_API_URL")
     
     # ========================================================================
     # LLM CONFIGURATION

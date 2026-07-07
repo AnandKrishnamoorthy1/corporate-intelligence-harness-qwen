@@ -25,43 +25,24 @@ from typing import Optional
 import time
 
 def _format_bullet_points(text: str) -> str:
-    """Ensure bullet points (• or -) are on separate lines.
+    """Ensure bullet points (•) are on separate lines.
     
-    Fixes issues where LLM generates multiple bullet points on a single line:
-    "• Point 1 • Point 2" → "• Point 1\n• Point 2"
+    Split on bullets and rebuild with double newlines (markdown paragraph breaks).
     """
-    # Repeatedly apply substitution until all bullets are separated
-    max_iterations = 50
-    iteration = 0
-    prev_text = ""
+    # Split the text on bullet characters
+    parts = text.split('•')
     
-    while iteration < max_iterations and prev_text != text:
-        prev_text = text
-        
-        # Pattern 0: bold text (**) or header (##) immediately followed by bullet
-        # Ensures proper newline separation between headers/bold and bullets
-        text = re.sub(r'(\*\*|##)\s+(•\s+)', r'\1\n\2', text)
-        
-        # Pattern 1: Handle bullet character (•) followed by text and another bullet
-        # Match: bullet + space + text (up to next bullet) + space + bullet
-        text = re.sub(r'(•\s+[^•\n]+?)\s+(•\s+)', r'\1\n\2', text)
-        
-        # Pattern 2: Also catch bullets not preceded by newline
-        # Match: any non-newline character + space + bullet
-        text = re.sub(r'([^\n])\s+(•\s+)', r'\1\n\2', text)
-        
-        # Pattern 3: Handle colon followed by content followed by bullet
-        # ": content • " → ": content\n• "
-        text = re.sub(r'(:\s+[^\n•]+?)\s+(•\s+)', r'\1\n\2', text)
-        
-        iteration += 1
+    # First part (before any bullet) doesn't need a bullet prefix
+    result = [parts[0].strip()]
     
-    # Handle dash bullets too (sometimes LLM uses - instead of •)
-    # But be careful not to replace hyphens in words or numbers
-    # Look for: "- text" followed by another "- text"
-    text = re.sub(r'(^-\s+[^\n]+)\n-\s+', r'\1\n- ', text, flags=re.MULTILINE)
+    # Each subsequent part gets a bullet prefix on its own line
+    for part in parts[1:]:
+        stripped = part.strip()
+        if stripped:
+            result.append('• ' + stripped)
     
-    return text
+    # Join with double newlines (paragraph breaks in markdown)
+    return '\n\n'.join(result)
 
 
 def _fix_concatenated_text(text: str) -> str:
@@ -127,10 +108,22 @@ def _fix_concatenated_text(text: str) -> str:
         pattern = rf'([a-z]{4,})({word})(?=[a-z])'
         text = re.sub(pattern, rf'\1 \2', text, flags=re.IGNORECASE)
     
+    # Fourth-B: Fix special case: )and followed by capital letter like ")andTSLA"
+    text = re.sub(r'\)and([A-Z])', r') and \1', text)
+    # Fix: number)and like "(10)and"
+    text = re.sub(r'(\d)\)and([A-Z])', r'\1) and \2', text)
+    
     # Fifth pass: Insert space between runs of lowercase and numbers
     # This helps with patterns like "thestocksits21" → "thestocksits 21"
     text = re.sub(r'([a-z])(\d)', r'\1 \2', text)
     text = re.sub(r'(\d)([a-z])', r'\1 \2', text)
+    
+    # Sixth pass: Ensure proper line breaks around analysis section headers
+    # Pattern: bold emoji text followed by bullet should have line break
+    text = re.sub(r'(\*\*[🔴🟢].*?— Round \d+\*\*)•', r'\1\n\n•', text)
+    
+    # Pattern: Synthesis section followed by more text should have line break
+    text = re.sub(r'(\*\*Synthesis:\*\*[^•]+)(•|---|\*\*)', r'\1\n\n\2', text)
     
     return text
 
@@ -178,6 +171,58 @@ def _escape_currency(text: str) -> str:
             result.append(line)
     return '\n'.join(result)
 
+
+def _stream_report_chunks(text: str):
+    """Generator that yields short segments of text for streaming display.
+    
+    Chunks by sentences and short segments for fast, subtle streaming effect.
+    """
+    # Split on sentence boundaries (periods followed by space) but preserve formatting
+    segments = []
+    current_segment = ""
+    
+    for line in text.split('\n'):
+        if not line.strip():
+            # Empty line - yield what we have and empty line
+            if current_segment:
+                segments.append(current_segment + '\n\n')
+                current_segment = ""
+            else:
+                segments.append('\n')
+        else:
+            # For lines with bullets or headers, keep them together
+            if line.strip().startswith(('•', '-', '**', '##', '###')):
+                if current_segment:
+                    segments.append(current_segment)
+                    current_segment = ""
+                segments.append(line + '\n')
+            else:
+                # Split long lines into sentences
+                sentences = re.split(r'(\. )', line)
+                for i, part in enumerate(sentences):
+                    current_segment += part
+                    # Yield after complete sentence
+                    if part == '. ' and i < len(sentences) - 1:
+                        segments.append(current_segment)
+                        current_segment = ""
+                
+                # Add newline after line if not empty
+                if current_segment:
+                    current_segment += '\n'
+                elif line.strip():
+                    segments.append(line + '\n')
+    
+    # Yield any remaining segment
+    if current_segment:
+        segments.append(current_segment)
+    
+    # Yield segments with small delay for subtle streaming effect
+    for segment in segments:
+        if segment.strip():
+            yield segment
+            time.sleep(0.01)  # 10ms delay between segments
+
+
 # ============================================================================
 # PAGE CONFIGURATION
 # ============================================================================
@@ -189,17 +234,22 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Modern CSS for enhanced UI/UX
+# Modern CSS for enhanced UI/UX - Alibaba Cloud Console Aesthetic
 st.markdown("""
 <style>
     /* Color Palette */
     :root {
         --primary-purple: #667eea;
         --primary-dark-purple: #764ba2;
-        --alibaba-orange: #FF6600;
+        --alibaba-orange: #ff6a00;
         --alibaba-light-orange: #FF8C42;
         --success: #10b981;
         --error: #ef4444;
+        --clean-white: #ffffff;
+        --light-gray: #f8fafc;
+        --border-gray: #e2e8f0;
+        --text-dark: #0f172a;
+        --text-muted: #64748b;
     }
     
     /* Typography & General */
@@ -210,65 +260,97 @@ st.markdown("""
     h1, h2, h3 {
         font-weight: 600;
         letter-spacing: -0.5px;
-        font-size: 1.3em;
+        color: var(--text-dark);
     }
     
     h1 { font-size: 1.5em; }
     h2 { font-size: 1.35em; }
-    h3 { font-size: 1.2em; }
+    h3 { font-size: 1.05em; }
     
-    /* Main Container */
+    /* Main Container - Clean light gray background */
     .main {
-        background: linear-gradient(135deg, #f5f7fa 0%, #f9fafb 100%);
+        background: var(--light-gray);
     }
     
-    /* Header & Title - Alibaba inspired gradient */
+    /* Header & Title - Minimalist card with top accent */
+    /* Header Container - Compact and tight */
+    .header-container {
+        padding: 12px 24px;
+        margin-bottom: 14px;
+        background: var(--clean-white);
+        border: 1px solid var(--border-gray);
+        border-top: 4px solid var(--alibaba-orange);
+        border-radius: 0 0 8px 8px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    }
+    
     .main-title {
         text-align: center;
-        background: linear-gradient(135deg, #FF6600 0%, #FF8C42 100%);
-        color: white;
-        padding: 40px 20px;
-        margin: -80px -80px 30px -80px;
-        border-radius: 0 0 20px 20px;
-        box-shadow: 0 10px 30px rgba(255, 102, 0, 0.2);
-        font-size: 2.0em;
+        color: var(--text-dark);
+        margin: 0;
+        font-size: 1.9em;
         font-weight: 700;
+        line-height: 1.2;
     }
     
     /* Cards & Boxes */
     .card {
-        background: white;
+        background: var(--clean-white);
         padding: 20px;
-        border-radius: 12px;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-        border: 1px solid rgba(0, 0, 0, 0.05);
+        border-radius: 8px;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+        border: 1px solid var(--border-gray);
         transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         margin-bottom: 15px;
     }
     
     .card:hover {
-        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
-        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+        transform: translateY(-1px);
     }
     
+    /* Status Box - Clean white card with left accent border */
     .status-box {
-        background: linear-gradient(135deg, #FF660015 0%, #FF8C4215 100%);
-        padding: 20px;
-        border-radius: 12px;
-        border-left: 5px solid #FF6600;
-        border: 1px solid rgba(255, 102, 0, 0.2);
+        background: var(--clean-white);
+        padding: 16px 20px;
+        border-radius: 8px;
+        border: 1px solid var(--border-gray);
+        border-left: 4px solid var(--alibaba-orange);
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+        color: var(--text-dark);
+    }
+    
+    .status-box * {
+        color: var(--text-dark);
     }
     
     .status-box.success {
-        border-left-color: #10b981;
-        background: linear-gradient(135deg, #10b98115 0%, #06b6d415 100%);
-        border-color: rgba(16, 185, 129, 0.2);
+        border-left-color: var(--success);
     }
     
     .status-box.error {
-        border-left-color: #ef4444;
-        background: linear-gradient(135deg, #ef444415 0%, #f8717715 100%);
-        border-color: rgba(239, 68, 68, 0.2);
+        border-left-color: var(--error);
+    }
+    
+    /* Orange badge/box text styling */
+    .routing-badge {
+        display: inline-block;
+        padding: 8px 16px;
+        border-radius: 20px;
+        font-weight: 600;
+        margin: 5px 0;
+        background: var(--alibaba-orange);
+        color: white !important;
+    }
+    
+    .research-badge {
+        background: var(--alibaba-orange);
+        color: white !important;
+    }
+    
+    .general-badge {
+        background: var(--alibaba-orange);
+        color: white !important;
     }
     
     /* Badges */
@@ -283,69 +365,51 @@ st.markdown("""
     }
     
     .badge-success {
-        background: linear-gradient(135deg, #10b981 0%, #06b6d4 100%);
+        background: var(--success);
         color: white;
     }
     
     .badge-error {
-        background: linear-gradient(135deg, #ef4444 0%, #f87171 100%);
+        background: var(--error);
         color: white;
     }
     
     .badge-research {
-        background: linear-gradient(135deg, #3b82f6 0%, #60a5fa 100%);
+        background: #3b82f6;
         color: white;
     }
     
     .badge-general {
-        background: linear-gradient(135deg, #a855f7 0%, #d946ef 100%);
+        background: #a855f7;
         color: white;
     }
     
-    .routing-badge {
-        display: inline-block;
-        padding: 8px 16px;
-        border-radius: 20px;
-        font-weight: 600;
-        margin: 5px 0;
-    }
-    
-    .research-badge {
-        background-color: #dbeafe;
-        color: #1e40af;
-    }
-    
-    .general-badge {
-        background-color: #f3e8ff;
-        color: #6b21a8;
-    }
-    
-    /* Portfolio Metrics */
+    /* Metric Box - Clean white card with faint border */
     .metric-box {
-        background: linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%);
-        padding: 20px;
-        border-radius: 12px;
-        border: 1px solid #e5e7eb;
+        background: var(--clean-white);
+        padding: 16px;
+        border-radius: 8px;
+        border: 1px solid var(--border-gray);
         text-align: center;
-        margin: 10px 0;
+        margin: 8px 0;
         transition: all 0.3s ease;
     }
     
     .metric-box:hover {
-        border-color: #FF6600;
-        box-shadow: 0 4px 12px rgba(255, 102, 0, 0.15);
+        border-color: var(--alibaba-orange);
+        box-shadow: 0 2px 8px rgba(255, 106, 0, 0.1);
     }
     
     .metric-value {
-        font-size: 1.8em;
+        font-size: 1.4em;
         font-weight: 700;
-        color: #1f2937;
-        margin: 10px 0 5px 0;
+        color: var(--text-dark);
+        margin: 8px 0 3px 0;
     }
     
     .metric-label {
-        font-size: 1.0em;
-        color: #6b7280;
+        font-size: 0.9em;
+        color: var(--text-muted);
         font-weight: 500;
     }
     
@@ -354,15 +418,15 @@ st.markdown("""
         font-family: 'Fira Code', 'Monaco', monospace;
         font-size: 0.95em;
         line-height: 1.6;
-        color: #374151;
-        background: #f9fafb;
+        color: var(--text-dark);
+        background: var(--light-gray);
         padding: 2px 4px;
         border-radius: 4px;
     }
     
     .log-container {
-        background: #f3f4f6;
-        border: 1px solid #e5e7eb;
+        background: var(--light-gray);
+        border: 1px solid var(--border-gray);
         border-radius: 8px;
         padding: 12px;
         max-height: 400px;
@@ -371,12 +435,12 @@ st.markdown("""
     
     /* Success & Error Badges */
     .success-badge {
-        color: #10b981;
+        color: var(--success);
         font-weight: 600;
     }
     
     .error-badge {
-        color: #ef4444;
+        color: var(--error);
         font-weight: 600;
     }
     
@@ -388,77 +452,208 @@ st.markdown("""
     }
     
     th {
-        background: linear-gradient(135deg, #FF6600 0%, #FF8C42 100%);
-        color: white;
-        padding: 12px;
+        background-color: #f1f5f9;
+        color: #475569;
+        padding: 8px;
         text-align: left;
         font-weight: 600;
+        border-bottom: 2px solid var(--border-gray);
+        text-transform: uppercase;
+        font-size: 0.72rem;
+        letter-spacing: 0.5px;
     }
     
     td {
         padding: 12px;
-        border-bottom: 1px solid #e5e7eb;
+        border-bottom: 1px solid var(--border-gray);
+        color: var(--text-dark);
     }
     
     tr:hover {
-        background-color: #f9fafb;
+        background-color: var(--light-gray);
     }
     
     /* Buttons - Alibaba Orange */
     button {
-        background: linear-gradient(135deg, #FF6600 0%, #FF8C42 100%);
-        color: white;
+        background: var(--alibaba-orange);
+        color: white !important;
         border: none;
         padding: 10px 20px;
-        border-radius: 8px;
+        border-radius: 6px;
         cursor: pointer;
         font-weight: 600;
         transition: all 0.3s ease;
     }
     
     button:hover {
-        box-shadow: 0 4px 12px rgba(255, 102, 0, 0.4);
-        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(255, 106, 0, 0.25);
+        transform: translateY(-1px);
+    }
+    
+    button * {
+        color: white !important;
     }
     
     /* Sidebar */
     [data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #f9fafb 0%, #f3f4f6 100%);
+        background: var(--clean-white);
+        border-right: 1px solid var(--border-gray);
     }
     
     /* Input Fields */
     input, textarea, select {
-        border: 1px solid #e5e7eb !important;
-        border-radius: 8px !important;
+        border: 1px solid var(--border-gray) !important;
+        border-radius: 6px !important;
         padding: 10px !important;
         font-size: 0.95em !important;
+        background: var(--clean-white) !important;
+        color: var(--text-dark) !important;
         transition: all 0.3s ease !important;
     }
     
     input:focus, textarea:focus, select:focus {
-        border-color: #FF6600 !important;
-        box-shadow: 0 0 0 3px rgba(255, 102, 0, 0.1) !important;
+        border-color: var(--alibaba-orange) !important;
+        box-shadow: 0 0 0 3px rgba(255, 106, 0, 0.1) !important;
+    }
+    
+    /* Clean White Card for the Interface Prompt */
+    .interface-box {
+        background-color: #ffffff !important;
+        padding: 16px 20px !important;
+        border-radius: 8px !important;
+        border: 1px solid var(--border-gray) !important;
+        border-left: 4px solid var(--alibaba-orange) !important;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05) !important;
+        margin-bottom: 20px !important;
+    }
+    
+    .interface-title {
+        color: var(--text-dark) !important;
+        font-weight: 600 !important;
+        font-size: 1.15rem !important;
+        margin: 0 !important;
+    }
+    
+    .interface-subtitle {
+        color: var(--text-muted) !important;
+        font-size: 0.9rem !important;
+        margin: 4px 0 0 0 !important;
+    }
+    
+    /* ─────────────────────────────────────────────────────────────────
+       💥 ULTIMATE FIX: FORCE ALL INNER BUTTON LABELS TO DARK SLATE
+       ───────────────────────────────────────────────────────────────── */
+    
+    /* Target the buttons AND every single element nested inside them */
+    div[data-testid="stButton"] button,
+    div[data-testid="stButton"] button *,
+    button[data-testid="stBaseButton-secondary"],
+    button[data-testid="stBaseButton-secondary"] * {
+        color: #334155 !important;
+        -webkit-text-fill-color: #334155 !important; /* Forces color past browser theme engine overrides */
+        background-color: #ffffff !important;
+    }
+
+    /* Target the hover state for the buttons AND every nested element inside them */
+    div[data-testid="stButton"] button:hover,
+    div[data-testid="stButton"] button:hover *,
+    button[data-testid="stBaseButton-secondary"]:hover,
+    button[data-testid="stBaseButton-secondary"]:hover * {
+        color: #ff6a00 !important; /* Turn text Alibaba Orange on hover */
+        -webkit-text-fill-color: #ff6a00 !important;
+        border-color: #ff6a00 !important;
+    }
+
+    /* Clean border wrapper around the button container */
+    div[data-testid="stButton"] button, 
+    button[data-testid="stBaseButton-secondary"] {
+        border: 1px solid #cbd5e1 !important;
+        border-radius: 6px !important;
+        font-weight: 500 !important;
+    }
+
+    /* ─────────────────────────────────────────────────────────────────
+       💥 ULTIMATE FIX: FORCE TOP DEPLOY TOOLBAR ELEMENTS TO DARK SLATE
+       ───────────────────────────────────────────────────────────────── */
+    
+    /* Target the top layout header and every single child element nested within it */
+    header[data-testid="stHeader"],
+    header[data-testid="stHeader"] *,
+    header[data-testid="stHeader"] div,
+    header[data-testid="stHeader"] span,
+    header[data-testid="stHeader"] button,
+    header[data-testid="stHeader"] a {
+        color: #475569 !important;
+        -webkit-text-fill-color: #475569 !important; /* Force color past browser/theme overrides */
+    }
+
+    /* Give the top header buttons a clean layout border profile if they render with backgrounds */
+    header[data-testid="stHeader"] button {
+        background-color: #ffffff !important;
+        border: 1px solid #cbd5e1 !important;
+        border-radius: 4px !important;
+    }
+    
+    header[data-testid="stHeader"] button:hover {
+        border-color: #ff6a00 !important;
+        color: #ff6a00 !important;
+        -webkit-text-fill-color: #ff6a00 !important;
     }
     
     /* Prevent stale element fading during long computations */
-    /* Keep chat messages and previous context fully visible while streams process */
     [data-stale="true"] {
         opacity: 1 !important;
         filter: none !important;
         backdrop-filter: none !important;
     }
     
-    /* Specifically ensure chat messages stay vivid */
     [data-testid="stChatMessage"][data-stale="true"] {
         opacity: 1 !important;
         filter: none !important;
     }
     
-    /* Prevent blur on message containers */
     [data-stale="true"] [data-testid="stChatMessage"] {
         opacity: 1 !important;
         filter: none !important;
     }
+    
+    /* Chat message formatting */
+    [data-testid="stChatMessage"] p {
+        line-height: 1.6;
+        margin: 8px 0;
+        color: var(--text-dark);
+    }
+    
+    [data-testid="stChatMessage"] ul {
+        margin: 10px 0;
+        padding-left: 24px;
+    }
+    
+    [data-testid="stChatMessage"] li {
+        margin: 6px 0;
+        line-height: 1.6;
+    }
+    
+    [data-testid="stChatMessage"] strong {
+        display: inline;
+        color: var(--text-dark);
+    }
+    
+    [data-testid="stChatMessage"] {
+        word-wrap: break-word;
+        overflow-wrap: break-word;
+        color: var(--text-dark);
+    }
+    
+    [data-testid="stChatMessage"] a {
+        color: var(--alibaba-orange);
+        text-decoration: none;
+    }
+    
+    [data-testid="stChatMessage"] a:hover {
+        text-decoration: underline;
+    }
+    
 </style>
 """, unsafe_allow_html=True)
 
@@ -495,13 +690,12 @@ if "last_completed_trade" not in st.session_state:
 # CONFIGURATION & CONSTANTS
 # ============================================================================
 
-# Environment-aware backend routing:
-# 1. Try Streamlit Cloud Secrets (Production)
-# 2. Fall back to .env / local environment (Development)
-if "BACKEND_API_URL" in st.secrets:
-    API_BASE_URL = st.secrets["BACKEND_API_URL"]
-else:
-    API_BASE_URL = os.getenv("BACKEND_API_URL", "http://localhost:9000")
+# Backend routing: Try Streamlit secrets (Cloud), fall back to .env (Alibaba/Local)
+try:
+    API_BASE_URL = st.secrets.get("BACKEND_API_URL", "http://localhost:8002")
+except (FileNotFoundError, AttributeError):
+    # Suppress warning and use environment variables instead
+    API_BASE_URL = os.getenv("BACKEND_API_URL", "http://localhost:8002")
 
 # Clean up any accidental trailing slashes
 API_BASE_URL = API_BASE_URL.rstrip("/")
@@ -894,7 +1088,7 @@ def get_routing_badge_label(routing_decision: str) -> str:
 # ============================================================================
 
 st.markdown(
-    "<h1 class='main-title'>📊 Corporate Intelligence & Earnings Analyst</h1>",
+    "<div class='header-container'><h1 class='main-title'>🧠 Corporate Intelligence & Earnings Analyst</h1></div>",
     unsafe_allow_html=True,
 )
 
@@ -944,7 +1138,7 @@ with st.sidebar:
     st.divider()
 
     # ── Portfolio Panel ──────────────────────────────────────────────────
-    st.markdown("### 📊 Portfolio")
+    st.markdown("<h3 style='font-size: 1.05em; font-weight: 600;'>📊 Portfolio</h3>", unsafe_allow_html=True)
     _refresh_key = "portfolio_refresh"
     if st.button("🔄 Refresh Portfolio", key=_refresh_key, use_container_width=True):
         st.session_state.pop("portfolio_data", None)
@@ -985,12 +1179,12 @@ with st.sidebar:
             pnl_color = "#10b981" if _pnl >= 0 else "#ef4444"
             pnl_symbol = "📈" if _pnl >= 0 else "📉"
             st.markdown(f"""
-                <div class='metric-box' style='border-left: 5px solid {pnl_color};'>
+                <div class='metric-box' style='border-left: 5px solid {pnl_color}; padding: 12px;'>
                     <div class='metric-label'>Unrealised P&L</div>
-                    <div class='metric-value' style='color: {pnl_color};'>
+                    <div class='metric-value' style='color: {pnl_color}; font-size: 1.3em; margin: 4px 0 2px 0;'>
                         {pnl_symbol} ${_pnl:+,.2f}
                     </div>
-                    <div style='font-size: 0.9em; color: #6b7280;'>{_pnl_pct:+.2f}%</div>
+                    <div style='font-size: 0.75em; color: #6b7280;'>{_pnl_pct:+.2f}%</div>
                 </div>
             """, unsafe_allow_html=True)
 
@@ -1172,13 +1366,9 @@ with st.sidebar:
 # ============================================================================
 
 st.markdown("""
-<div style='background: linear-gradient(135deg, #FF660015 0%, #FF8C4215 100%); 
-            padding: 20px; border-radius: 12px; margin-bottom: 20px; 
-            border-left: 5px solid #FF6600;'>
-    <h3 style='margin: 0; color: #1f2937;'>💬 Analysis Interface</h3>
-    <p style='margin: 5px 0 0 0; color: #6b7280; font-size: 0.95em;'>
-        Ask questions about stocks, market analysis, or your portfolio
-    </p>
+<div class='interface-box'>
+    <div class='interface-title'>💬 Analysis Interface</div>
+    <div class='interface-subtitle'>Ask questions about stocks, market analysis, or your portfolio</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -1186,7 +1376,8 @@ st.markdown("""
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         # Fix concatenated text, bullet formatting, and escape currency for all content
-        if message["role"] == "assistant":
+        # EXCEPT trade execution messages which are already properly formatted
+        if message["role"] == "assistant" and message.get("metadata", {}).get("type") != "trade_execution":
             content = _format_bullet_points(_fix_concatenated_text(message["content"]))
         else:
             content = message["content"]
@@ -1195,50 +1386,82 @@ for message in st.session_state.messages:
         # Display metadata if it's an assistant response
         if message["role"] == "assistant" and "metadata" in message:
             metadata = message["metadata"]
+            is_trade_execution = metadata.get("type") == "trade_execution"
             
             col1, col2, col3 = st.columns(3)
             
             with col1:
-                st.metric(
-                    "Routing Decision",
-                    get_routing_badge_label(metadata.get("routing_decision", "Unknown")),
-                )
+                if is_trade_execution:
+                    trade_info = metadata.get("trade_info", {})
+                    trade_status = trade_info.get("status", "N/A")
+                    st.markdown(f"""
+                        <div style='font-size: 0.75em; color: #6b7280;'>
+                            <strong>Trade Status</strong><br>
+                            <span style='font-size: 0.9em; color: #1f2937;'>✅ {trade_status}</span>
+                        </div>
+                    """, unsafe_allow_html=True)
+                else:
+                    st.markdown(f"""
+                        <div style='font-size: 0.75em; color: #6b7280;'>
+                            <strong>Routing Decision</strong><br>
+                            <span style='font-size: 0.9em; color: #1f2937;'>{get_routing_badge_label(metadata.get("routing_decision", "Unknown"))}</span>
+                        </div>
+                    """, unsafe_allow_html=True)
             
             with col2:
-                st.metric(
-                    "Execution Time",
-                    f"{metadata.get('execution_time_ms', 0):.1f}ms"
-                )
+                st.markdown(f"""
+                    <div style='font-size: 0.75em; color: #6b7280;'>
+                        <strong>Execution Time</strong><br>
+                        <span style='font-size: 0.9em; color: #1f2937;'>{metadata.get('execution_time_ms', 0):.1f}ms</span>
+                    </div>
+                """, unsafe_allow_html=True)
             
             with col3:
-                st.metric(
-                    "Log Entries",
-                    len(metadata.get("logs", []))
-                )
+                st.markdown(f"""
+                    <div style='font-size: 0.75em; color: #6b7280;'>
+                        <strong>Log Entries</strong><br>
+                        <span style='font-size: 0.9em; color: #1f2937;'>{len(metadata.get("logs", []))}</span>
+                    </div>
+                """, unsafe_allow_html=True)
+            
+            # ── Render archived logs from history ──
+            past_logs = metadata.get("logs", [])
+            if past_logs:
+                with st.expander("👁️ View Agent Execution Logs", expanded=False):
+                    formatted_steps = []
+                    for raw_line in past_logs:
+                        level, msg = _extract_log_message(raw_line)
+                        if msg:
+                            step = _format_agent_step(level, msg)
+                            if step:
+                                formatted_steps.append(step)
+                    
+                    if formatted_steps:
+                        st.markdown("\n\n".join(formatted_steps))
+                    else:
+                        st.caption("No displayable agent steps found in logs.")
+            
+            # ── Render trade notification only within its own history turn ──
+            trade_info = metadata.get("trade_info")
+            if trade_info:
+                with st.expander(f"📊 **Trade:** {trade_info['trade_details'].get('action', 'N/A')} {trade_info['trade_details'].get('ticker', 'N/A')} ({trade_info['status']})", expanded=False):
+                    if trade_info["status"] == "EXECUTED":
+                        execution = trade_info.get("execution_result", {})
+                        st.success("✅ Trade executed successfully")
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.metric("Filled Price", f"${execution.get('filled_price', 0):.2f}")
+                        with col2:
+                            st.metric("Quantity", f"{execution.get('quantity', 0):.4f} shares")
+                        st.caption(f"Order ID: `{execution.get('order_id', 'N/A')}`")
+                    else:
+                        st.error("❌ Trade rejected")
+                        st.caption(f"Request ID: `{trade_info.get('request_id', 'N/A')}`")
 
 
 # ============================================================================
 # USER INPUT & PROCESSING
 # ============================================================================
-
-st.markdown("---")
-
-# Display last completed trade in a collapsible section
-if st.session_state.get("last_completed_trade"):
-    trade = st.session_state.last_completed_trade
-    with st.expander(f"📊 **Last Trade:** {trade['trade_details'].get('action', 'N/A')} {trade['trade_details'].get('ticker', 'N/A')} ({trade['status']})", expanded=False):
-        if trade["status"] == "EXECUTED":
-            execution = trade.get("execution_result", {})
-            st.success("✅ Trade executed successfully")
-            col1, col2 = st.columns(2)
-            with col1:
-                st.metric("Filled Price", f"${execution.get('filled_price', 0):.2f}")
-            with col2:
-                st.metric("Quantity", f"{execution.get('quantity', 0):.4f} shares")
-            st.caption(f"Order ID: `{execution.get('order_id', 'N/A')}`")
-        else:
-            st.error("❌ Trade rejected")
-            st.caption(f"Request ID: `{trade.get('request_id', 'N/A')}`")
 
 # Chat input box
 # Chat input box — also accepts pre-fills from sidebar "Deep Analysis" button
@@ -1291,13 +1514,26 @@ if user_input:
             log_placeholder = st.empty()
             log_placeholder.markdown("")  # Explicitly render empty to clear cache
             
-            # Build conversation history - MINIMAL context only to avoid token bloat
-            # Only include the last 1 user turn (for follow-up disambiguation) with severe truncation
-            history_turns = [
-                {"role": m["role"], "content": m["content"][:100]}  # 100 chars max per turn
-                for m in st.session_state.messages[:-1]  # exclude current user msg
-                if m["role"] == "user"  # Only user queries, not responses
-            ][-1:]  # Only the most recent question
+            # Build conversation history - Keep last 5 turns for richer context
+            # This preserves ticker and analysis context across multiple follow-up questions
+            history_turns = []
+            
+            # Include last 5 turns (user + assistant pairs)
+            for m in st.session_state.messages[:-1]:  # exclude current user msg
+                # Keep full content + metadata for proper ticker disambiguation
+                turn = {"role": m["role"], "content": m["content"]}
+                
+                # For assistant messages, include routing decision and ticker context
+                if m["role"] == "assistant" and "metadata" in m:
+                    metadata = m.get("metadata", {})
+                    # Add routing info to help backend understand context
+                    if metadata.get("routing_decision"):
+                        turn["routing_decision"] = metadata["routing_decision"]
+                
+                history_turns.append(turn)
+            
+            # Only keep the last ~10 messages to balance context vs token usage (5 turns)
+            history_turns = history_turns[-10:]
 
             # Call the API with streaming logs
             response = call_analysis_api_with_streaming(user_input, log_placeholder, conversation_history=history_turns)
@@ -1371,7 +1607,13 @@ if user_input:
                 )
                 # Fix concatenated text, bullet formatting, and escape currency
                 cleaned_report = _format_bullet_points(_fix_concatenated_text(report_md))
-                st.markdown(_escape_currency(cleaned_report))
+                escaped_report = _escape_currency(cleaned_report)
+                
+                # Render report directly (no streaming) to avoid partial markdown rendering issues
+                st.markdown(escaped_report)
+            
+            # Force immediate rerun to refresh sidebar with new sources
+            st.rerun()
 
 
 # =========================================================================
@@ -1446,8 +1688,17 @@ if st.session_state.get("pending_approval_request") and not st.session_state.get
                             execution_result = result.get("execution_result", {})
                             
                             st.markdown("### 📊 Order Execution")
-                            filled_price = execution_result.get('filled_price')
-                            quantity = execution_result.get('quantity')
+                            # Handle None values explicitly
+                            try:
+                                filled_price = float(execution_result.get('filled_price') or 0)
+                            except (ValueError, TypeError):
+                                filled_price = 0.0
+                            
+                            try:
+                                quantity = float(execution_result.get('quantity') or 0)
+                            except (ValueError, TypeError):
+                                quantity = 0.0
+                            
                             st.success(
                                 f"**Order ID:** `{execution_result.get('order_id', 'N/A')}`\n\n"
                                 f"**Status:** {execution_result.get('status', 'N/A').upper()}\n\n"
@@ -1464,11 +1715,35 @@ if st.session_state.get("pending_approval_request") and not st.session_state.get
                             )
                             
                             # Store trade result for persistence
-                            st.session_state.last_completed_trade = {
+                            trade_info = {
                                 "status": "EXECUTED",
                                 "trade_details": result.get("trade_details", {}),
                                 "execution_result": execution_result
                             }
+                            st.session_state.last_completed_trade = trade_info
+                            
+                            # Create a new message for the trade execution result
+                            trade_execution_message = {
+                                "role": "assistant",
+                                "content": (
+                                    f"✅ **TRADE EXECUTED SUCCESSFULLY!**\n\n"
+                                    f"**Order ID:** `{execution_result.get('order_id', 'N/A')}`\n\n"
+                                    f"**Status:** {execution_result.get('status', 'N/A').upper()}\n\n"
+                                    f"**Fill Price:** ${filled_price:.2f}\n\n"
+                                    f"**Quantity Filled:** {quantity:.4f} shares\n\n"
+                                    f"**Total Value:** ${execution_result.get('total_value', 0):.2f}\n\n"
+                                    f"**Filled At:** {execution_result.get('filled_at', 'N/A')}"
+                                ),
+                                "metadata": {
+                                    "type": "trade_execution",
+                                    "trade_info": trade_info,
+                                    "logs": result.get("logs", []),
+                                    "execution_time_ms": result.get("execution_time_ms", 0)
+                                }
+                            }
+                            
+                            # Add the trade execution message to the chat history
+                            st.session_state.messages.append(trade_execution_message)
                             
                             # Clear the approval request and refresh portfolio
                             st.session_state.pending_approval_request = None
@@ -1501,11 +1776,17 @@ if st.session_state.get("pending_approval_request") and not st.session_state.get
                         st.error("❌ **TRADE REJECTED**")
                         
                         # Store rejection for persistence
-                        st.session_state.last_completed_trade = {
+                        trade_info = {
                             "status": "REJECTED",
                             "trade_details": approval_data.get("pending_approval", {}),
                             "request_id": request_id
                         }
+                        st.session_state.last_completed_trade = trade_info
+                        
+                        # Also attach to last message's metadata so it displays with that turn
+                        if st.session_state.messages:
+                            msg = st.session_state.messages[-1]
+                            msg.setdefault("metadata", {})["trade_info"] = trade_info
                         
                         # Clear the approval request and refresh portfolio
                         st.session_state.pending_approval_request = None
@@ -1537,7 +1818,7 @@ with st.expander("ℹ️ About This Platform"):
         st.info("💻 **Frontend**: Streamlit")
     
     with col2:
-        st.info("⚙️ **Backend**: FastAPI + Uvicorn")
+        st.info("⚙️ **Backend**: FastAPI on Alibaba Cloud FC")
     
     with col3:
         st.info("🧠 **Orchestration**: LangGraph State Machine")

@@ -223,6 +223,7 @@ def triage_node(state: GraphState) -> GraphState:
         trade_action = qwen_routing_decision.get("trade_action", None)
         
         logger.info(f"Extracted Ticker: {state['current_target_ticker']}")
+        logger.info(f"[TRIAGE COMPLETE] Set state['current_target_ticker'] = '{state['current_target_ticker']}'")
         logger.info(f"Routing Decision: {state['routing_decision']}")
         logger.info(f"Confidence: {confidence:.2%}")
         logger.info(f"Reasoning: {reasoning}")
@@ -361,16 +362,16 @@ def research_node(state: GraphState) -> GraphState:
             position_list = []
             total_market_value = 0.0
             
-            for ticker, pos in positions.items():
+            for pos_ticker, pos in positions.items():
                 shares = float(pos.get("quantity", 0))
                 avg_cost = float(pos.get("average_cost", 0))
-                pdata = live_prices.get(ticker, {})
+                pdata = live_prices.get(pos_ticker, {})
                 current_price = pdata.get("price", avg_cost)
                 market_value = shares * current_price
                 total_market_value += market_value
                 
                 position_list.append({
-                    "ticker": ticker,
+                    "ticker": pos_ticker,
                     "shares": shares,
                     "avg_cost": avg_cost,
                     "current_price": current_price,
@@ -476,6 +477,8 @@ def research_node(state: GraphState) -> GraphState:
 
     try:
         logger.info("Convening Tri-Agent Investment Committee on REAL data (with skill-driven context)...")
+        logger.info(f"[RESEARCH NODE] About to call run_investment_committee with ticker={ticker}")
+        logger.debug(f"[RESEARCH NODE] state['current_target_ticker']={state.get('current_target_ticker')}")
 
         # Save portfolio data to state for downstream use
         state["portfolio_data"] = portfolio_data_for_skills
@@ -493,9 +496,19 @@ def research_node(state: GraphState) -> GraphState:
             market_data=market_data_with_skills,
             rounds=2,
         )
+        logger.info(f"[RESEARCH NODE] Committee finished, verdict ticker would be from report")
 
         verdict = committee_result["verdict"]
         report_markdown = committee_result["report_markdown"]
+        
+        # DEBUG: Extract the ticker from the report heading to verify
+        import re
+        report_heading_match = re.search(r'Investment Committee Verdict: ([A-Z]{1,5})', report_markdown)
+        if report_heading_match:
+            report_ticker = report_heading_match.group(1)
+            logger.info(f"[DEBUG] Report heading contains ticker: {report_ticker}")
+            if report_ticker != ticker:
+                logger.error(f"[ERROR] TICKER MISMATCH: Passed {ticker} to committee, but report shows {report_ticker}!")
 
         state["research_data"] = {
             **real_stock_data,
@@ -610,17 +623,61 @@ def general_q_node(state: GraphState) -> GraphState:
         logger.info(f"[GENERAL Q] Competitor analysis detected for {ticker}")
         
         try:
-            # Define sector-specific competitors
-            competitors_map = {
-                'TSLA': ['F', 'GM', 'TM', 'HMC', 'BMW', 'VWAGY'],  # Auto/EV
-                'NVDA': ['AMD', 'INTC', 'QCOM', 'AVGO', 'MCHP'],      # Semiconductors
-                'AMD': ['NVDA', 'INTC', 'QCOM', 'AVGO', 'MCHP'],      # Semiconductors
-                'GOOGL': ['META', 'MSFT', 'AMZN', 'NFLX', 'CRM'],     # Tech/Advertising
-                'AAPL': ['MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META'],    # Tech/Services
-                'MSFT': ['AAPL', 'GOOGL', 'AMZN', 'NVDA', 'IBM'],     # Tech/Cloud
-            }
+            # ────────────────────────────────────────────────────────────────────
+            # LLM-DRIVEN COMPETITOR IDENTIFICATION
+            # Ask Qwen to identify the top 3 competitors for this ticker
+            # ────────────────────────────────────────────────────────────────────
             
-            competitors = competitors_map.get(ticker, [])[:3]  # Get top 3 competitors
+            from app.tools.yahoo_finance_mcp_client import YahooFinanceMCPClient
+            from app.llm import call_qwen_for_general_qa
+            
+            yf_client = YahooFinanceMCPClient()
+            target_info = yf_client.get_stock_info(ticker)
+            
+            if target_info:
+                logger.info(f"[GENERAL Q] Fetching target info for {ticker}...")
+                target_name = target_info.get('shortName', ticker)
+                target_sector = target_info.get('sector', 'Unknown')
+                logger.info(f"[GENERAL Q] {ticker} ({target_name}) - Sector: {target_sector}")
+                
+                # Ask Qwen to identify competitors
+                competitor_query = (
+                    f"For {ticker} ({target_name}) in the {target_sector} sector, "
+                    f"name exactly 3 main competitors (tickers only, comma-separated). "
+                    f"Example format: NVDA, AMD, INTC"
+                )
+                logger.info(f"[GENERAL Q] Asking Qwen for competitors: {competitor_query}")
+                
+                competitor_response = call_qwen_for_general_qa(competitor_query)
+                
+                # Parse Qwen's response to extract tickers (first 3 uppercase words of 1-5 chars)
+                import re
+                ticker_matches = re.findall(r'\b([A-Z]{1,5})\b', competitor_response)
+                # Filter out common non-ticker words
+                common_words = {'FOR', 'THE', 'AND', 'ARE', 'MAIN', 'TOP', 'BEST', 'INCLUDE', 'SUCH', 'LIKE', 'WHICH', 'THAT', 'COMPETITORS', 'SECTOR', 'INDUSTRY'}
+                competitors = [t for t in ticker_matches if t not in common_words][:3]
+                
+                if competitors:
+                    logger.info(f"[GENERAL Q] Qwen identified competitors: {competitors}")
+                else:
+                    logger.warning(f"[GENERAL Q] Qwen response unclear, using fallback: {competitor_response[:100]}")
+                    # Fallback to a generic competitor pool if parsing fails
+                    fallback_pools = {
+                        'Automotive': ['F', 'GM', 'TM'],
+                        'Technology': ['MSFT', 'GOOGL', 'AAPL'],
+                        'Retail': ['WMT', 'TGT', 'COST'],
+                        'Finance': ['JPM', 'BAC', 'WFC'],
+                    }
+                    for sector_key, tickers in fallback_pools.items():
+                        if sector_key.lower() in target_sector.lower():
+                            competitors = [t for t in tickers if t != ticker][:3]
+                            break
+                    else:
+                        competitors = ['MSFT', 'GOOGL', 'AAPL']  # Default tech peers
+                    logger.info(f"[GENERAL Q] Using fallback competitors: {competitors}")
+            else:
+                logger.warning(f"[GENERAL Q] Could not fetch target info for {ticker}, using fallback")
+                competitors = ['MSFT', 'GOOGL', 'AAPL']
             if competitors:
                 logger.info(f"[GENERAL Q] Fetching data for competitors: {competitors}")
                 
@@ -632,28 +689,86 @@ def general_q_node(state: GraphState) -> GraphState:
                     try:
                         comp_info = yf_client.get_stock_info(comp_ticker)
                         if comp_info:
+                            logger.debug(f"[GENERAL Q] {comp_ticker} available fields: {list(comp_info.keys())}")
+                            
+                            # Use correct Yahoo Finance camelCase field names
+                            profit_margin = comp_info.get('profitMargins')  # Already a decimal (0.25 = 25%)
+                            roe = comp_info.get('returnOnEquity')  # Already a decimal (0.22 = 22%)
+                            pe = comp_info.get('trailingPE') or comp_info.get('forwardPE')
+                            revenue_growth = comp_info.get('revenueGrowth')  # Already a decimal (0.067 = 6.7%)
+                            
                             comp_data.append({
                                 'ticker': comp_ticker,
-                                'price': comp_info.get('price'),
-                                'profit_margin': comp_info.get('profit_margin'),
-                                'roe': comp_info.get('return_on_equity'),
-                                'pe': comp_info.get('pe_ratio'),
-                                'revenue_growth': comp_info.get('quarterly_revenue_growth_yoy'),
-                                'earnings_growth': comp_info.get('quarterly_earnings_growth_yoy'),
+                                'price': comp_info.get('regularMarketPrice') or comp_info.get('currentPrice'),
+                                'profit_margin': profit_margin,
+                                'roe': roe,
+                                'pe': pe,
+                                'revenue_growth': revenue_growth,
+                                'market_cap': comp_info.get('marketCap'),
+                                'eps': comp_info.get('trailingEps'),
+                                'dividend_yield': comp_info.get('trailingAnnualDividendYield'),
+                                'gross_margin': comp_info.get('grossMargins'),
+                                'operating_margin': comp_info.get('operatingMargins'),
                             })
+                            logger.info(f"[GENERAL Q] {comp_ticker} → Margin: {profit_margin}, ROE: {roe}, P/E: {pe}, Revenue Growth: {revenue_growth}")
                     except Exception as e:
-                        logger.debug(f"[GENERAL Q] Failed to fetch {comp_ticker}: {e}")
+                        logger.warning(f"[GENERAL Q] Failed to fetch {comp_ticker}: {e}")
                         continue
                 
+                logger.info(f"[GENERAL Q] Competitor data retrieved: {len(comp_data)} records")
                 if comp_data:
+                    logger.debug(f"[GENERAL Q] Raw competitor data: {comp_data}")
                     competitor_context = "\n\n## Competitor Data (for comparison):\n"
                     for comp in comp_data:
                         competitor_context += f"\n**{comp['ticker']}:**\n"
-                        competitor_context += f"- Price: ${comp['price']}\n"
-                        competitor_context += f"- Profit Margin: {comp['profit_margin']*100:.2f}%\n"
-                        competitor_context += f"- ROE: {comp['roe']*100:.2f}%\n"
-                        competitor_context += f"- P/E: {comp['pe']}\n"
-                        competitor_context += f"- Revenue Growth: {comp['revenue_growth']*100:.2f}%\n"
+                        
+                        # Price - safely convert to float
+                        try:
+                            price = float(comp.get('price') or 0)
+                            competitor_context += f"- Price: ${price:.2f}\n" if price > 0 else "- Price: N/A\n"
+                        except (ValueError, TypeError):
+                            competitor_context += "- Price: N/A\n"
+                        
+                        # Profit Margin - Yahoo returns as decimal (0.25 = 25%)
+                        try:
+                            profit_margin = comp.get('profit_margin')
+                            if profit_margin is not None and profit_margin != '':
+                                competitor_context += f"- Profit Margin: {float(profit_margin)*100:.2f}%\n"
+                            else:
+                                competitor_context += "- Profit Margin: N/A\n"
+                        except (ValueError, TypeError):
+                            competitor_context += "- Profit Margin: N/A\n"
+                        
+                        # ROE - Yahoo returns as decimal (0.22 = 22%)
+                        try:
+                            roe = comp.get('roe')
+                            if roe is not None and roe != '':
+                                competitor_context += f"- ROE: {float(roe)*100:.2f}%\n"
+                            else:
+                                competitor_context += "- ROE: N/A\n"
+                        except (ValueError, TypeError):
+                            competitor_context += "- ROE: N/A\n"
+                        
+                        # P/E Ratio - Yahoo returns as float
+                        try:
+                            pe = comp.get('pe')
+                            if pe is not None and pe != '' and float(pe) > 0:
+                                competitor_context += f"- P/E: {float(pe):.2f}\n"
+                            else:
+                                competitor_context += "- P/E: N/A\n"
+                        except (ValueError, TypeError):
+                            competitor_context += "- P/E: N/A\n"
+                        
+                        # Revenue Growth - Yahoo returns as decimal (0.067 = 6.7%)
+                        try:
+                            revenue_growth = comp.get('revenue_growth')
+                            if revenue_growth is not None and revenue_growth != '':
+                                competitor_context += f"- Revenue Growth: {float(revenue_growth)*100:.2f}%\n"
+                            else:
+                                competitor_context += "- Revenue Growth: N/A\n"
+                        except (ValueError, TypeError):
+                            competitor_context += "- Revenue Growth: N/A\n"
+                    
                     logger.info(f"[GENERAL Q] Competitor context prepared ({len(competitor_context)} chars)")
         
         except Exception as e:
