@@ -4,7 +4,7 @@
   <rect width="1200" height="300" fill="#2f1238"/>
   <circle cx="1140" cy="150" r="260" fill="#55305f" opacity="0.82"/>
   <circle cx="1010" cy="150" r="160" fill="#6a3b74" opacity="0.36"/>
-  <g transform="translate(92 74)">
+  <g transform="translate(92 50)">
     <text x="0" y="82" fill="#ffffff" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="72" font-weight="800">Corporate</text>
     <text x="0" y="154" fill="#ffffff" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="72" font-weight="800">Intelligence Harness</text>
     <rect x="0" y="177" width="346" height="9" rx="4.5" fill="#22c58b"/>

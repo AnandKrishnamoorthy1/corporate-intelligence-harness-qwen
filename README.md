@@ -138,7 +138,7 @@ Open the Streamlit URL, then run a research prompt such as `Analyze NVDA`.
 - Runtime: Python 3.12 on `custom.debian11`
 - Streaming: `/api/analyze/stream` over NDJSON
 
-See [DEPLOYMENT.md](DEPLOYMENT.md) and [deployment/DEPLOYMENT_ALIBABA.md](deployment/DEPLOYMENT_ALIBABA.md) for production setup.
+See [deployment/DEPLOYMENT_ALIBABA.md](deployment/DEPLOYMENT_ALIBABA.md) for production setup.
 
 ## API reference
 
@@ -200,7 +200,7 @@ app/tools/sec_tools.py             SEC EDGAR 10-Q extraction
 app/tools/external_tools.py        Yahoo Finance and external data tools
 app/trading/                       Broker interface, simulation, Robinhood MCP
 skills/                            Reusable portfolio and risk skills
-tests/                             Backend and formatting tests
+test_backend.py                    Backend API smoke test
 ```
 
 ## Security
@@ -214,8 +214,7 @@ tests/                             Backend and formatting tests
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) - Design decisions and component details
 - [IMPLEMENTATION.md](IMPLEMENTATION.md) - Implementation notes
-- [SETUP.md](SETUP.md) - Detailed local setup
-- [DEPLOYMENT.md](DEPLOYMENT.md) - Docker and production deployment
+- [deployment/DEPLOYMENT_ALIBABA.md](deployment/DEPLOYMENT_ALIBABA.md) - Alibaba Cloud deployment
 - [ROBINHOOD_OAUTH_SETUP.md](ROBINHOOD_OAUTH_SETUP.md) - Robinhood OAuth configuration
 
 ## Troubleshooting
