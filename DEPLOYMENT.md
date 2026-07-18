@@ -1,6 +1,6 @@
 # Deployment & Configuration Guide
 
-Complete instructions for running the Corporate Intelligence Engine locally, with Qwen API integration, Docker containerization, and cloud deployment.
+Complete instructions for running the Corporate Intelligence Harness locally, with Qwen API integration, Docker containerization, and cloud deployment.
 
 ## Deployment Modes
 
@@ -24,7 +24,7 @@ Complete instructions for running the Corporate Intelligence Engine locally, wit
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│                    CORPORATE INTELLIGENCE ENGINE                  │
+│                   CORPORATE INTELLIGENCE HARNESS                 │
 │                     Web Layer Architecture                         │
 ├──────────────────────────────────────────────────────────────────┤
 │                                                                    │
@@ -79,7 +79,7 @@ Data Flow:
 
 ```bash
 # Navigate to project directory
-cd c:\AI_Agents\corporate-intelligence-engine
+cd c:\AI_Agents\corporate-intelligence-harness
 
 # Install all required packages
 pip install -r requirements.txt
@@ -110,7 +110,7 @@ pip show fastapi streamlit uvicorn
 
 ```bash
 # Navigate to project directory
-cd c:\AI_Agents\corporate-intelligence-engine
+cd c:\AI_Agents\corporate-intelligence-harness
 
 # Start the Uvicorn server with auto-reload (port 9000 for local dev)
 uvicorn backend:app --reload --host 0.0.0.0 --port 9000
@@ -121,7 +121,7 @@ uvicorn backend:app --reload --host 0.0.0.0 --port 9000
 INFO:     Uvicorn running on http://0.0.0.0:8002
 INFO:     Application startup complete
 ================================================================================
-CORPORATE INTELLIGENCE ENGINE - FASTAPI BACKEND
+CORPORATE INTELLIGENCE HARNESS - FASTAPI BACKEND
 ================================================================================
 Server started at: 2026-06-13T14:30:00.000000
 Available endpoints:
@@ -139,7 +139,7 @@ Available endpoints:
 ```bash
 # Open a NEW terminal window
 # Navigate to project directory
-cd c:\AI_Agents\corporate-intelligence-engine
+cd c:\AI_Agents\corporate-intelligence-harness
 
 # Start the Streamlit app
 streamlit run frontend.py
@@ -221,7 +221,7 @@ Above the final report, you'll see:
 ```json
 {
   "status": "healthy",
-  "service": "corporate-intelligence-engine",
+  "service": "corporate-intelligence-harness",
   "timestamp": "2026-06-13T14:30:00.000000"
 }
 ```
@@ -359,7 +359,7 @@ streamlit run frontend.py --server.port 8502
 **Solution:**
 Ensure you're running the commands from the project directory:
 ```bash
-cd c:\AI_Agents\corporate-intelligence-engine
+cd c:\AI_Agents\corporate-intelligence-harness
 ```
 
 ### Issue: Slow or hanging requests
@@ -644,7 +644,7 @@ curl http://localhost:8002/health
 ```json
 {
   "status": "healthy",
-  "service": "corporate-intelligence-engine"
+  "service": "corporate-intelligence-harness"
 }
 ```
 

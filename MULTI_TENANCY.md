@@ -2,7 +2,7 @@
 
 ## Overview
 
-This guide explains how the Corporate Intelligence Engine safely supports both **live money trading** (for you) and **paper trading simulation** (for public users) without risk of real money execution.
+This guide explains how the Corporate Intelligence Harness safely supports both **live money trading** (for you) and **paper trading simulation** (for public users) without risk of real money execution.
 
 ## The Problem
 

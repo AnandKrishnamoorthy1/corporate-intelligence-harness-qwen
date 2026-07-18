@@ -1,4 +1,4 @@
-# Architecture — Corporate Intelligence Engine (Qwen Edition)
+# Architecture — Corporate Intelligence Harness (Qwen Edition)
 
 ## System Overview
 
@@ -209,7 +209,7 @@ for line in response.iter_lines():
 ## Folder Structure (Actual)
 
 ```
-corporate-intelligence-engine-qwen/
+corporate-intelligence-harness/
 ├── backend.py                  # FastAPI app + NDJSON streaming endpoint
 ├── frontend.py                 # Streamlit app + sidebar citation panels
 ├── orchestrator.py             # LangGraph state machine + all nodes
@@ -264,7 +264,7 @@ Risk management. A public demo should never accidentally execute real trades. Th
 
 
 ```
-corporate-intelligence-engine/
+corporate-intelligence-harness/
 │
 ├── 📄 Root Configuration Files
 │   ├── .env                    # ⚠️ NEVER COMMIT - Local environment variables

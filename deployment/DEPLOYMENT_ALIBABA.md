@@ -1,6 +1,6 @@
 # Alibaba Cloud Deployment Strategy — Cost-Optimized Serverless Architecture
 
-**Cost-to-Zero Deployment for Corporate Intelligence Engine on Alibaba Cloud Function Compute**
+**Cost-to-Zero Deployment for Corporate Intelligence Harness on Alibaba Cloud Function Compute**
 
 This guide covers the complete production deployment strategy on Alibaba Cloud, optimized for **absolute cost minimization** — paying only for exact milliseconds your agent is active, scaling to $0.00 when idle.
 
@@ -132,7 +132,7 @@ Create `s.yaml` in your project root:
 ```yaml
 # Serverless Devs Configuration for Alibaba Cloud Function Compute
 edition: 3.0.0
-name: corporate-intelligence-engine
+name: corporate-intelligence-harness
 access: default  # Uses your Alibaba Cloud credentials from ~/.s/access.yaml
 
 vars:
@@ -147,7 +147,7 @@ services:
     props:
       region: ${vars.region}
       functionName: corporate-intelligence-fastapi
-      description: FastAPI backend for Corporate Intelligence Engine
+      description: FastAPI backend for Corporate Intelligence Harness
       runtime: ${vars.runtime}
       codeUri: ./  # Deploy entire project directory
       handler: backend.handler  # Entry point (see below)
@@ -180,7 +180,7 @@ services:
     props:
       region: ${vars.region}
       functionName: corporate-intelligence-streamlit
-      description: Streamlit web UI for Corporate Intelligence Engine
+      description: Streamlit web UI for Corporate Intelligence Harness
       runtime: python3.10
       codeUri: ./
       handler: frontend.handler
@@ -542,7 +542,7 @@ s logs -t 100 --tail
 
 ## ✅ You're Ready!
 
-Your Corporate Intelligence Engine is now deployed on Alibaba Cloud with:
+Your Corporate Intelligence Harness is now deployed on Alibaba Cloud with:
 - ✅ **Zero cost when idle**
 - ✅ **Pay-per-millisecond pricing when active**
 - ✅ **Automatic scaling for traffic spikes**

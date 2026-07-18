@@ -1,5 +1,5 @@
 """
-Corporate Intelligence Engine — Agentic AI Orchestrator
+Corporate Intelligence Harness — Agentic AI Orchestrator
 
 A production-grade LangGraph state machine that orchestrates a multi-agent
 financial research and autonomous trading workflow:
@@ -1704,7 +1704,7 @@ if __name__ == "__main__":
     logger.info("\n\n")
     logger.info("╔" + "═" * 78 + "╗")
     logger.info("║" + " " * 78 + "║")
-    logger.info("║" + "  CORPORATE INTELLIGENCE ENGINE — QWEN EDITION  ".center(78) + "║")
+    logger.info("║" + "  CORPORATE INTELLIGENCE HARNESS — QWEN EDITION  ".center(78) + "║")
     logger.info("║" + "  Tri-Agent Committee · LangGraph · Robinhood MCP  ".center(78) + "║")
     logger.info("║" + " " * 78 + "║")
     logger.info("╚" + "═" * 78 + "╝")

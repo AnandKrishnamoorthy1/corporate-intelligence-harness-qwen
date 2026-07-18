@@ -1,6 +1,6 @@
 # Deployment Guide — Alibaba Cloud Serverless
 
-Quick deployment steps for Corporate Intelligence Engine on Alibaba Cloud Function Compute.
+Quick deployment steps for Corporate Intelligence Harness on Alibaba Cloud Function Compute.
 
 ---
 

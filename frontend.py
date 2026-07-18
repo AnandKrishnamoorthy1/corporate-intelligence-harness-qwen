@@ -1,7 +1,7 @@
 """
-Corporate Intelligence Engine - Streamlit Frontend
+Corporate Intelligence Harness - Streamlit Frontend
 
-An interactive web UI for the corporate-intelligence-engine that connects to the
+An interactive web UI for the corporate-intelligence-harness that connects to the
 FastAPI backend and provides real-time visualization of agent reasoning steps.
 
 Features:
@@ -228,7 +228,7 @@ def _stream_report_chunks(text: str):
 # ============================================================================
 
 st.set_page_config(
-    page_title="Corporate Intelligence Engine",
+    page_title="Corporate Intelligence Harness",
     page_icon="favicon.ico",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -1817,6 +1817,6 @@ with st.expander("ℹ️ About This Platform"):
 st.markdown("""
 ---
 <p style='text-align: center; color: #999; font-size: 0.9em;'>
-Corporate Intelligence Engine | AI State Graph | Financial Research
+Corporate Intelligence Harness | AI State Graph | Financial Research
 </p>
 """, unsafe_allow_html=True)

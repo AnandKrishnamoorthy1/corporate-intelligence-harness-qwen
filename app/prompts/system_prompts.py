@@ -1,4 +1,4 @@
-"""System prompts for LLM agents in the corporate intelligence engine."""
+"""System prompts for LLM agents in the corporate intelligence harness."""
 
 # ============================================================================
 # TRIAGE/ROUTER PROMPT

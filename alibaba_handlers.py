@@ -203,7 +203,7 @@ def health_handler(environ: dict, start_response: Callable) -> list:
     response = {
         "status": "healthy",
         "environment": os.getenv("ENVIRONMENT", "unknown"),
-        "service": "corporate-intelligence-engine"
+        "service": "corporate-intelligence-harness"
     }
     
     return [json.dumps(response).encode('utf-8')]

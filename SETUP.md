@@ -1,6 +1,6 @@
 # Installation & Setup Guide
 
-Complete setup instructions for the Corporate Intelligence Engine with Qwen LLM.
+Complete setup instructions for the Corporate Intelligence Harness with Qwen LLM.
 
 ## Deployment Options
 
@@ -48,7 +48,7 @@ Complete setup instructions for the Corporate Intelligence Engine with Qwen LLM.
 
 ```bash
 # Clone repository
-cd corporate-intelligence-engine-qwen
+cd corporate-intelligence-harness
 
 # Create virtual environment
 python -m venv venv
@@ -441,7 +441,7 @@ Check [DashScope pricing](https://dashscope.aliyun.com/pricing) for current rate
 # OPTIONAL: MONITORING (for production)
 # ============================================================================
 # LANGSMITH_API_KEY=...
-# LANGSMITH_PROJECT=corporate-intelligence-engine
+# LANGSMITH_PROJECT=corporate-intelligence-harness
 # SENTRY_DSN=...
 ```
 
@@ -696,7 +696,7 @@ REDIS_URL=redis://localhost:6379/0
 **Solution:**
 ```bash
 # Ensure you're in the project root
-cd c:\AI_Agents\corporate-intelligence-engine
+cd c:\AI_Agents\corporate-intelligence-harness
 
 # Install pydantic-settings
 pip install pydantic-settings

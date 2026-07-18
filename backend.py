@@ -1,5 +1,5 @@
 """
-Corporate Intelligence Engine - FastAPI Backend
+Corporate Intelligence Harness - FastAPI Backend
 
 A RESTful backend service that orchestrates the AI state graph and exposes it
 through a clean HTTP API for the Streamlit frontend to consume.
@@ -284,7 +284,7 @@ async def lifespan(app: FastAPI):
     """Lifespan context manager for startup and shutdown events."""
     # Startup
     print("\n" + "=" * 80)
-    print("CORPORATE INTELLIGENCE ENGINE - FASTAPI BACKEND")
+    print("CORPORATE INTELLIGENCE HARNESS - FASTAPI BACKEND")
     print("=" * 80)
     print(f"Server started at: {datetime.now().isoformat()}")
     
@@ -310,7 +310,7 @@ async def lifespan(app: FastAPI):
     
     # Shutdown
     print("\n" + "=" * 80)
-    print("CORPORATE INTELLIGENCE ENGINE - SERVER SHUTDOWN")
+    print("CORPORATE INTELLIGENCE HARNESS - SERVER SHUTDOWN")
     print("=" * 80 + "\n")
 
 
@@ -319,7 +319,7 @@ async def lifespan(app: FastAPI):
 # ============================================================================
 
 app = FastAPI(
-    title="Corporate Intelligence Engine API",
+    title="Corporate Intelligence Harness API",
     description="AI State Graph API for financial research and corporate intelligence",
     version="1.0.0",
     docs_url="/docs",
@@ -345,7 +345,7 @@ def home_health_check():
     """Root health check endpoint for Alibaba Cloud Function Compute."""
     return {
         "status": "online",
-        "engine": "Corporate Intelligence Engine Backend",
+        "engine": "Corporate Intelligence Harness Backend",
         "python_version": "3.12",
         "version": "1.0.0"
     }
@@ -355,7 +355,7 @@ def health_check():
     """Health check endpoint."""
     return {
         "status": "healthy",
-        "service": "corporate-intelligence-engine",
+        "service": "corporate-intelligence-harness",
         "timestamp": datetime.now().isoformat()
     }
 
@@ -363,7 +363,7 @@ def health_check():
 async def alibaba_invoke_trigger():
     return {
         "status": "success",
-        "engine": "Corporate Intelligence Engine",
+        "engine": "Corporate Intelligence Harness",
         "message": "FastAPI backend is fully operational on custom.debian11!",
         "execution_mode": "Multi-agent framework loaded smoothly"
     }
@@ -479,7 +479,7 @@ async def health_check():
     """
     return {
         "status": "healthy",
-        "service": "corporate-intelligence-engine",
+        "service": "corporate-intelligence-harness",
         "timestamp": datetime.now().isoformat()
     }
 
@@ -1114,7 +1114,7 @@ async def value_error_handler(request, exc):
 
 if __name__ == "__main__":
     print("\n" + "#" * 80)
-    print("# Corporate Intelligence Engine - FastAPI Backend")
+    print("# Corporate Intelligence Harness - FastAPI Backend")
     print("# Starting Uvicorn server on port 9000 (Alibaba Cloud FC requirement)...")
     print("#" * 80 + "\n")
     
@@ -1148,7 +1148,7 @@ def handler(environ, start_response):
 async def alibaba_invoke_trigger():
     return {
         "status": "success",
-        "engine": "Corporate Intelligence Engine",
+        "engine": "Corporate Intelligence Harness",
         "message": "FastAPI backend is fully operational on custom.debian11!",
         "execution_mode": "Multi-agent framework loaded smoothly"
     }

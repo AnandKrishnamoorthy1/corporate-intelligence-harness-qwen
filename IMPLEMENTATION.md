@@ -128,7 +128,7 @@ Any individual failure returns `{}` / mock data. The merge always produces a usa
 
 Uses `edgartools` to fetch XBRL-parsed quarterly filings. Extracted per quarter: revenue, net income, gross profit, operating income, R&D expense, EPS (diluted), cash, long-term debt, total assets, shareholders' equity, operating cash flow, capex, free cash flow.
 
-Identity header sent to EDGAR: `corporate-intelligence-engine@hackathon.demo` (required by SEC fair-use policy).
+Identity header sent to EDGAR: `corporate-intelligence-harness@hackathon.demo` (required by SEC fair-use policy).
 
 ---
 

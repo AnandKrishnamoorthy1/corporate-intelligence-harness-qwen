@@ -10,7 +10,7 @@
 # Documentation: https://www.serverless-devs.com/
 
 edition: 3.0.0
-name: corporate-intelligence-engine
+name: corporate-intelligence-harness
 access: alibaba
 
 vars:

@@ -24,7 +24,7 @@ except ImportError:
 
 # SEC requires any HTTP client to declare a contact identity.
 # This is not verified; it's just used for SEC rate-limit attribution.
-_EDGAR_IDENTITY = "corporate-intelligence-engine@hackathon.demo"
+_EDGAR_IDENTITY = "corporate-intelligence-harness@hackathon.demo"
 
 # XBRL concept names tried in priority order for each metric.
 # Different companies use different tags; we try the most common first.

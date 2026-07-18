@@ -1,5 +1,5 @@
 """
-Configuration management for Corporate Intelligence Engine.
+Configuration management for Corporate Intelligence Harness.
 
 Loads environment variables and provides typed configuration objects
 for the backend, frontend, and orchestrator.
@@ -143,7 +143,7 @@ class Settings(BaseSettings):
     # ========================================================================
     
     langsmith_api_key: Optional[str] = Field(default=None, env="LANGSMITH_API_KEY")
-    langsmith_project: str = Field(default="corporate-intelligence-engine", env="LANGSMITH_PROJECT")
+    langsmith_project: str = Field(default="corporate-intelligence-harness", env="LANGSMITH_PROJECT")
     sentry_dsn: Optional[str] = Field(default=None, env="SENTRY_DSN")
     
     # ========================================================================
