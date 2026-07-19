@@ -4,27 +4,9 @@
 
 Corporate Intelligence Harness is a Streamlit and FastAPI application backed by a LangGraph workflow. Qwen classifies each request, routes it to a specialized path, and produces a structured response from live financial evidence.
 
-```text
-User
-  |
-  v
-Streamlit UI (frontend.py)
-  |
-  | HTTP + NDJSON
-  v
-FastAPI API (backend.py)
-  |
-  v
-LangGraph orchestrator (orchestrator.py)
-  |
-  +-- research -----> investment committee
-  +-- direct_trade -> approval request
-  +-- portfolio ----> portfolio risk analysis
-  +-- general_q ----> conversational response
-  |
-  v
-approval_execution -> reporting -> response
-```
+<p align="center">
+  <img src="assets/corporate-intelligence-harness-architecture.png" alt="Corporate Intelligence Harness architecture showing the Streamlit frontend, Alibaba Cloud backend, LangGraph routes, Qwen models, investment committee, skills, data sources, broker layer, approval gate, and persistence" width="100%" />
+</p>
 
 ## Request Routing
 

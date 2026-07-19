@@ -1,7 +1,7 @@
 <div align="center">
   <img src="assets/readme-hero.svg" alt="Corporate Intelligence Harness - Adversarial Qwen investment committee" width="100%" />
 
-  <h2>Market research, made adversarial before it becomes actionable.</h2>
+  <h2>Market intelligence, adversarially tested before execution.</h2>
 
   <p>
     <strong>Corporate Intelligence Harness</strong> turns a plain-English market question into a cited investment committee report, then pauses for human approval before any simulated or broker-backed trade executes.
@@ -76,38 +76,19 @@ This is not a single prompt wrapped in a UI. The system chooses a path, invokes 
 
 ## Architecture
 
+<p align="center">
+  <a href="ARCHITECTURE.md">
+    <img src="assets/corporate-intelligence-harness-architecture.png" alt="Corporate Intelligence Harness architecture showing the Streamlit frontend, Alibaba Cloud backend, LangGraph routes, Qwen models, investment committee, skills, data sources, human approval, broker execution, and persistence" width="100%" />
+  </a>
+</p>
+
+<p align="center"><sub>Open the diagram for detailed architecture notes.</sub></p>
+
+**BUY/SELL execution path**
+
 ```text
-User prompt
-   |
-   v
-Streamlit frontend
-   |
-   | HTTPS / NDJSON stream
-   v
-FastAPI backend
-   |
-   v
-LangGraph orchestrator
-   |
-   +-- triage_node
-   |     +-- research
-   |     +-- direct_trade
-   |     +-- portfolio
-   |     +-- general_q
-   |
-   +-- research_node
-   |     +-- Yahoo Finance fetch
-   |     +-- SEC EDGAR 10-Q fetch
-   |     +-- Bull Analyst debate
-   |     +-- Bear Auditor debate
-   |     +-- Portfolio Director verdict
-   |
-   +-- approval_execution_node
-   |     +-- MockSimulationEngine
-   |     +-- RobinhoodMCPClient
-   |
-   v
-Cited markdown report
+direct_trade -> trading_node -> pre-trade risk validation
+             -> human approval -> broker execution -> cited report
 ```
 
 ## Quick start
@@ -208,6 +189,7 @@ test_backend.py                    Backend API smoke test
 - Keep API keys in `.env`, Streamlit Secrets, or Alibaba Function Compute environment variables.
 - Default to `BROKER_TYPE=simulation` for demos and development.
 - Require explicit approval before every trade execution.
+- Treat live Robinhood integration as optional and experimental. Keep `ROBINHOOD_TRADING_ENABLED=false` outside a private environment with valid credentials.
 - Do not commit `.env`, broker credentials, OAuth secrets, or generated ledgers with sensitive account data.
 
 ## Documentation
@@ -215,7 +197,6 @@ test_backend.py                    Backend API smoke test
 - [ARCHITECTURE.md](ARCHITECTURE.md) - Design decisions and component details
 - [IMPLEMENTATION.md](IMPLEMENTATION.md) - Implementation notes
 - [deployment/DEPLOYMENT_ALIBABA.md](deployment/DEPLOYMENT_ALIBABA.md) - Alibaba Cloud deployment
-- [ROBINHOOD_OAUTH_SETUP.md](ROBINHOOD_OAUTH_SETUP.md) - Robinhood OAuth configuration
 
 ## Troubleshooting
 
@@ -227,12 +208,15 @@ test_backend.py                    Backend API smoke test
 | Port already in use | Change `BACKEND_PORT` or start uvicorn on another port. |
 | Streamlit shows old code | Reboot the Streamlit app or push a new commit. |
 
-## Performance target
+## Observed performance
+
+An individual Qwen call typically takes **7-20 seconds**, while triage can take up to 8 seconds. Full research invokes multiple model calls across two debate rounds and a Director verdict, so end-to-end latency can reach 2-3 minutes. Timings vary with model load, portfolio size, external data latency, and cold starts.
 
 | Operation | Typical time |
 |---|---:|
-| Qwen triage | 300-600 ms |
+| Qwen triage and routing | Up to 8 s |
+| Individual Qwen analysis call | 7-20 s |
 | Parallel data fetch | 1-3 s |
-| Committee debate | 4-8 s |
-| Portfolio analysis | 2-4 s |
-| Full research query | 6-12 s |
+| Committee debate and Director verdict | 1-2 min |
+| Portfolio analysis | 10-30 s |
+| Full research query | 2-3 min |

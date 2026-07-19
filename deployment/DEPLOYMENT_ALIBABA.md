@@ -507,8 +507,8 @@ s logs -t 100 --tail
 
 | Metric | Expected Value | Notes |
 |---|---|---|
-| Cold start time | 1-3 seconds | First request; subsequent requests instant |
-| Request latency (analysis) | 6-12 seconds | Qwen execution time |
+| Cold start time | 1-3 seconds | First request; warm requests avoid this overhead |
+| Request latency (full research) | 2-3 minutes | Multi-call debate, tools, and Director verdict |
 | Concurrent functions | Up to 100 | Adjustable in `instanceConcurrency` |
 | Monthly cost (10K queries) | $5.91 | Scales linearly with traffic |
 | Maximum deployment size | 50 GB (uncompressed) | Includes all dependencies |
