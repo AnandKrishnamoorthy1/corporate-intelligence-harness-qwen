@@ -980,15 +980,47 @@ async def execute_approved_trade(request_id: str) -> Dict[str, Any]:
                     detail=f"No approval record found for request {request_id}"
                 )
             
-            if not approval.get("approved"):
-                logger.error(f"❌ Trade {request_id} was REJECTED, cannot execute")
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Trade {request_id} was rejected and cannot be executed"
-                )
-            
-            # Get pending trade details
             pending_trade = pending_trade_store.get_pending_trade(request_id)
+
+            if not approval.get("approved"):
+                if not pending_trade:
+                    logger.error(f"No pending trade found for rejected request {request_id}")
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"No pending trade found for request {request_id}"
+                    )
+
+                logger.warning(f"[EXECUTE] Trade {request_id} was rejected by the human approver.")
+                logger.info(f"[EXECUTE] Rejected trade: {pending_trade.get('action')} "
+                            f"{pending_trade.get('ticker')} - {pending_trade.get('amount')}")
+                logger.info(f"[EXECUTE] Approver notes: {approval.get('approver_notes') or 'None'}")
+                logger.info("[EXECUTE] No broker call was made. No order was placed.")
+
+                pending_trade_store.clear_pending_trade(request_id)
+                request_tracker.complete_request(request_id)
+
+                execution_time = (datetime.now() - start_time).total_seconds() * 1000
+                execution_logs = log_capture.get_logs()
+                logger.info(f"[EXECUTE] Captured {len(execution_logs)} log entries")
+
+                return {
+                    "status": "success",
+                    "request_id": request_id,
+                    "execution_status": "rejected",
+                    "trade_details": {
+                        "ticker": pending_trade.get("ticker"),
+                        "action": pending_trade.get("action"),
+                        "amount": pending_trade.get("amount"),
+                        "quantity": pending_trade.get("quantity"),
+                    },
+                    "message": f"Trade rejected for {pending_trade.get('ticker')}. No order was placed.",
+                    "approval_decision": "rejected",
+                    "approver_notes": approval.get("approver_notes", ""),
+                    "timestamp": datetime.now().isoformat(),
+                    "logs": execution_logs,
+                    "execution_time_ms": execution_time,
+                }
+            
             if not pending_trade:
                 logger.error(f"❌ No pending trade found for {request_id}")
                 raise HTTPException(

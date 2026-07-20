@@ -4,12 +4,13 @@
   <h2>Market intelligence, adversarially tested before execution.</h2>
 
   <p>
-    <strong>Corporate Intelligence Harness</strong> turns a plain-English market question into a cited investment committee report, then pauses for human approval before any simulated or broker-backed trade executes.
+    <strong>Corporate Intelligence Harness</strong> uses Alibaba Qwen to turn a plain-English market question into a cited investment committee report. Its FastAPI backend runs serverlessly on Alibaba Cloud and pauses for human approval before any simulated or broker-backed trade executes.
   </p>
 
   <p>
     <img alt="Python 3.12" src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white">
     <img alt="Qwen" src="https://img.shields.io/badge/LLM-Alibaba%20Qwen-7C3AED">
+    <img alt="Alibaba Cloud" src="https://img.shields.io/badge/Cloud-Alibaba%20Cloud-FF6A00?logo=alibabacloud&logoColor=white">
     <img alt="FastAPI" src="https://img.shields.io/badge/API-FastAPI-009688?logo=fastapi&logoColor=white">
     <img alt="Streamlit" src="https://img.shields.io/badge/UI-Streamlit-FF4B4B?logo=streamlit&logoColor=white">
     <img alt="LangGraph" src="https://img.shields.io/badge/Workflow-LangGraph-1f6feb">

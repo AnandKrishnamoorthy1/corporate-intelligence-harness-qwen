@@ -1761,6 +1761,60 @@ if st.session_state.get("pending_approval_request") and not st.session_state.get
                     )
                     
                     if reject_response.status_code == 200:
+                        # Finalize the rejected trade through the execution endpoint so
+                        # the backend emits an auditable terminal log bundle.
+                        execute_response = requests.post(
+                            f"{API_BASE_URL}/api/execute/{request_id}",
+                            timeout=120
+                        )
+
+                        if execute_response.status_code != 200:
+                            error_resp = execute_response.json()
+                            st.error(f"Failed to finalize rejection: {execute_response.status_code}")
+                            st.error(
+                                f"**Error:** {error_resp.get('detail', 'Unknown error')}\n\n"
+                                f"**Status Code:** {execute_response.status_code}"
+                            )
+                            st.stop()
+                        else:
+                            result = execute_response.json()
+                            trade_details = result.get("trade_details") or approval_data.get("pending_approval", {})
+                            st.error("Trade rejected")
+                            st.info(result.get("message", "No trade was executed."))
+
+                            trade_info = {
+                                "status": "REJECTED",
+                                "trade_details": trade_details,
+                                "request_id": request_id,
+                                "approver_notes": result.get("approver_notes", "")
+                            }
+                            st.session_state.last_completed_trade = trade_info
+
+                            rejection_message = {
+                                "role": "assistant",
+                                "content": (
+                                    f"**TRADE REJECTED**\n\n"
+                                    f"**Action:** {trade_details.get('action', 'N/A')} "
+                                    f"{trade_details.get('ticker', 'N/A')}\n\n"
+                                    f"**Request ID:** `{request_id}`\n\n"
+                                    f"**Result:** No broker order was placed.\n\n"
+                                    f"**Notes:** {result.get('approver_notes') or 'Rejected via Streamlit UI'}"
+                                ),
+                                "metadata": {
+                                    "type": "trade_execution",
+                                    "trade_info": trade_info,
+                                    "logs": result.get("logs", []),
+                                    "execution_time_ms": result.get("execution_time_ms", 0)
+                                }
+                            }
+                            st.session_state.messages.append(rejection_message)
+
+                            # Clear the approval request and refresh portfolio
+                            st.session_state.pending_approval_request = None
+                            st.session_state.trade_completed = True
+                            st.session_state.pop("portfolio_data", None)  # refresh sidebar
+                            st.rerun()  # Auto-refresh page to display the terminal rejected state
+
                         st.error("❌ **TRADE REJECTED**")
                         
                         # Store rejection for persistence
